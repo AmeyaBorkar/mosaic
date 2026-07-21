@@ -91,8 +91,12 @@ pub fn render_structural(image: &ImageRef, cols: u32, cell_aspect: f32) -> Resul
 /// Compose per-cell output codepoints (produced by a Facet) into an ASCII string,
 /// row-major with `\n` between rows.
 ///
-/// Invalid codepoints are replaced with `U+FFFD` — untrusted Facet output is never
-/// assumed to be valid text.
+/// Untrusted Facet output is never assumed to be safe text. A codepoint is replaced
+/// with `U+FFFD` when it is not a valid Unicode scalar (`char::from_u32` fails) **or**
+/// when it is unsafe to emit — a C0/C1 control (including `ESC`, which would inject
+/// terminal escape sequences, and `LF`/`CR`, which would break the row/column grid)
+/// or a bidi/format override used for visual spoofing. Only printable glyphs cross
+/// the boundary; the row separators are the sole `\n` this function emits.
 pub fn compose_codepoints(cols: u32, rows: u32, codepoints: &[u32]) -> String {
     // Bounded capacity hint: callers must pass sane dimensions (the pipeline caps
     // them at `MAX_CELLS`); never pre-allocate unboundedly from untrusted sizes.
@@ -107,6 +111,7 @@ pub fn compose_codepoints(cols: u32, rows: u32, codepoints: &[u32]) -> String {
             let ch = codepoints
                 .get(idx)
                 .and_then(|&c| char::from_u32(c))
+                .filter(|c| !is_unsafe_glyph(*c))
                 .unwrap_or('\u{FFFD}');
             out.push(ch);
         }
@@ -115,6 +120,19 @@ pub fn compose_codepoints(cols: u32, rows: u32, codepoints: &[u32]) -> String {
         }
     }
     out
+}
+
+/// Whether a scalar value is unsafe to emit from untrusted Facet output and must be
+/// masked to `U+FFFD`: any C0/C1 control or `DEL` (`char::is_control`, covering `ESC`,
+/// `LF`, `CR`, …) and the bidirectional/format overrides used for visual spoofing.
+/// Rust's std cannot query the `Cf` general category without a Unicode table, so the
+/// well-known spoofing overrides are listed explicitly.
+fn is_unsafe_glyph(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{200E}' | '\u{200F}' | '\u{061C}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}')
 }
 
 /// Errors returned by the engine. Malformed input is always a value, never a panic.
@@ -847,6 +865,18 @@ mod tests {
         assert_eq!(compose_codepoints(2, 2, &cps), "A\u{FFFD}\n\u{FFFD}B");
         // Too few codepoints: missing cells become the replacement char, no panic.
         assert_eq!(compose_codepoints(2, 1, &[0x41]), "A\u{FFFD}");
+    }
+
+    #[test]
+    fn compose_codepoints_masks_control_and_bidi() {
+        // ESC, LF, DEL, and a RLO bidi override are all unsafe -> U+FFFD; 'A' survives.
+        // This blocks terminal-escape injection and newline-driven grid corruption
+        // from untrusted Facet output (validated once, for native and browser alike).
+        let cps = vec![0x1Bu32, 0x0A, 0x7F, 0x202E, 0x41];
+        assert_eq!(
+            compose_codepoints(5, 1, &cps),
+            "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}A"
+        );
     }
 
     // --- L2 structural (sub-cell patch) ---
