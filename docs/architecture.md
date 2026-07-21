@@ -1,0 +1,219 @@
+# Mosaic — Architecture & Decisions
+
+This document records the technical architecture and the decisions made so far,
+with their rationale. It complements `vision.md` (the *what* and *why*) with the
+*how*. Naming: **Mosaic** (platform), **Tessera** (engine, one per domain),
+**Facet** (style, many per engine).
+
+## Layered architecture
+
+1. **Mosaic (platform)** — the domain-agnostic substrate, built once: the Facet
+   registry, the safe runtime that executes Facets, auto-generated controls +
+   live preview, and composition.
+2. **Tessera (engine)** — one per domain. Defines what the media is and how it
+   decomposes, by filling the five-slot **engine contract**:
+
+   | Slot | Question it answers |
+   |------|---------------------|
+   | Input | What media does the engine take? |
+   | Unit | How is the media decomposed into workable pieces? |
+   | Feature vocabulary | What may a unit measure about itself? |
+   | Output primitive | What does a single unit become? |
+   | Composition | How are the output pieces reassembled into a whole? |
+3. **Facet (style)** — the community layer, many per Tessera. Declared
+   parameters (the user-facing knobs, which generate the controls) + pure logic
+   (the encoded method).
+
+## Decisions
+
+### D1 — Facet execution substrate: WebAssembly *(settled)*
+Facets are untrusted, community-authored code that must be **pure**
+(no network/disk/clock), **deterministic** (same Facet + same media = same
+render), **metered** (bounded CPU/memory), **fast** (live preview over millions
+of units), and **identical** client- and server-side. WASM provides all of it by
+construction:
+- *Purity by default* — a module has zero ambient authority; we grant no imports.
+- *Determinism* — core WASM arithmetic is bit-identical across engines (NaN
+  payloads canonicalized; no threads / relaxed-SIMD).
+- *Metering* — deterministic fuel plus memory caps.
+- *One runtime, both sides* — native WASM in the browser; Wasmtime on the server.
+- *Pluggable authoring* — WASM is an ABI, not a language: a Facet DSL for most
+  authors, bring-your-own-compiled for power users, all sandboxed identically.
+
+A bespoke bytecode VM would reinvent this, worse. WASM is the floor.
+
+### D2 — Core language Rust, shell TypeScript *(settled)*
+Each Tessera engine is written **once in Rust** and compiled to WASM, so the
+*same* engine code powers browser live-preview and server batch render with zero
+drift. Rust also hosts the runtime, metering, and the future Facet compiler.
+**TypeScript** (Next.js + pnpm) owns the editor, the auto-generated controls,
+live preview, and the registry.
+
+### D3 — Facet authoring: bootstrap now, custom DSL later *(settled)*
+Because the WASM substrate is permanent, the author-facing language is a
+swappable compiler frontend. We **bootstrap** Facets in AssemblyScript
+(TS-like → WASM) to validate the Tessera contract against real methods, then
+design the purpose-built **Facet DSL** from that evidence. Rationale: the right
+language cannot be designed before the contract it describes is proven; freezing
+it early would bake in the wrong abstraction.
+
+### D4 — Windows toolchain: rustup `stable-msvc` + VS Build Tools *(settled)*
+MSVC host toolchain — the most compatible on Windows. WASM builds need no native
+linker (Rust uses `rust-lld`); only native/server builds and `cargo test`
+require the MSVC C++ tools.
+
+### D5 — Unit access model: neighborhood gather + opt-in propagation *(settled — O1)*
+A unit is a pure function of features gathered over a bounded read-only
+neighborhood (radius R, declared; R=0 = self-only). This keeps the common path
+fully parallel and deterministic while covering all read-context methods (edges,
+gradients, contours, structure) — "read a neighborhood" (gather) has *no*
+write-dependencies, so `output[i] = f(readonly_input[neighborhood(i)])` stays
+embarrassingly parallel.
+
+The one genuinely-sequential pattern — feedback/propagation (e.g. error-diffusion
+dithering) — is confined to a separate, **opt-in** capability: a Facet returns a
+*residual* alongside its output, and the engine diffuses it to not-yet-processed
+units along a declared kernel and traversal order. The Facet stays pure; the
+engine owns the ordering, so it stays deterministic. This isolates the only real
+cost instead of imposing it on every Facet.
+
+### D6 — First feature vocabulary (ASCII): L0 + L1 + L2 *(settled — O2)*
+The ASCII Tessera's vocabulary ceiling is:
+- **L0 — Luminance** (cell mean, min/max/variance): density ramps.
+- **L1 — Gradient** (magnitude + orientation, via a neighborhood structure
+  tensor): edge-aware directional glyphs. Depends on D5 gather.
+- **L2 — Sub-cell structure** (an N×M luminance patch + glyph-atlas access): the
+  Facet shape-matches its patch against candidate glyphs however it likes.
+
+This is the vision's full "brightness → edges → sub-pixels" progression.
+Implementation may be staged (L0+L1 first, L2 immediately after); the contract
+reserves all three so nothing caps later. Color is deliberately excluded from
+ASCII and added by the ANSI Tessera as an extension of the same vocabulary shape.
+
+In `mosaic-core`, a vocabulary is a `feature::FeatureSchema` — an ordered list of
+typed fields (`Scalar` / `Vector` / `Patch`) each tagged with its `Gather`
+radius. The concrete ASCII fields live in the ASCII engine; the schema is the
+generic ABI the runtime uses to marshal features to the (WASM) Facet.
+
+**L2 now implemented.** The engine extracts an 8×8 sub-cell luminance patch
+(`extract_structural`, a self-only `Patch{8,8}`, stride 64) and a Facet matches it
+to the closest glyph by sum-of-squared-differences; density *and* structure fall
+out of that one nearest-glyph rule. The atlas + matcher live in a single `no_std`
+`glyph-atlas` crate compiled into **both** the native engine and the untrusted wasm
+Facet (`facets/structural`) — one matcher, not two that could drift. L2 is opt-in
+(only structural Facets pay the 64-slot stride, via a separate `extract_structural`;
+density/edge Facets keep the stride-3 L0+L1 path). Proven native≡sandboxed over 64
+random images and browser≡native end-to-end.
+
+### D7 — Facet runtime: wasmtime, pinned current *(settled)*
+`mosaic-runtime` executes Facets on wasmtime with fuel metering enabled, a
+per-execution memory cap (`StoreLimits`), and **zero imports** — so purity is
+structural, not policed. Verified end-to-end: a module declaring any import fails
+to instantiate; an infinite loop is halted by fuel; repeated runs are identical.
+
+**Full sandbox hardening (after an independent adversarial audit).** `StoreLimits`
+caps not only linear-memory size but table elements and memory/table/instance
+*counts*, and the engine `Config` disables threads (hence shared memory),
+multi-memory, and relaxed-SIMD while enabling NaN canonicalization. This closes
+host-OOM vectors the linear-memory cap alone missed (oversized `funcref` tables,
+many memories, shared memory) and makes execution deterministic across platforms.
+Compilation is size-bounded, and the map ABI rejects zero stride and bounds every
+untrusted size before allocating. Each vector has an adversarial test. The engine
+uses `libm` for transcendentals (e.g. `atan2f`) so gradient orientation is
+bit-identical across platforms and across the native/wasm builds.
+
+Pin wasmtime to the **latest** release, not an older "safe" version. An old
+wasmtime (v27) under a current rustc (1.97) aborted on trap delivery on Windows
+(`STATUS_STACK_BUFFER_OVERRUN`, non-unwinding panic) — a low-level unwinding
+mismatch between the compiler and a stale runtime, not a code bug and not fixable
+via `Config`. A toolchain-contemporary wasmtime (v47) fixed it.
+
+### D8 — Facet ABI: feature buffer in, `u32` tokens out *(settled)*
+A Facet exports `memory`, `alloc(i32) -> i32`, and
+`run(in_ptr, out_ptr, ncells, stride)`. The host (`mosaic-runtime::Sandbox::run_map`)
+allocates through the guest's *own* allocator, writes the per-cell feature buffer
+as little-endian `f32`, calls `run`, and reads back one `u32` output token per
+cell (for ASCII, a glyph codepoint). The call is **batch** (whole buffer), not
+per-cell, so a render is a single boundary crossing rather than millions.
+
+`alloc`/`run` are guest exports, so purity holds; every crossing is bounds-checked
+by wasmtime, so a malformed Facet errors rather than corrupting the host; and
+untrusted output codepoints are validated (`char::from_u32`, `U+FFFD` fallback)
+before composition. Proven end-to-end: `facets/ramp` — a real `no_std` Rust → wasm
+Facet (499 bytes) — renders images to ASCII inside the sandbox with byte-identical
+output to the native engine path (hermetic test).
+
+### D9 — Browser Facet execution: native WebAssembly in a timeout-metered Worker *(settled)*
+The server render (D7) runs Facets on wasmtime with fuel + `StoreLimits`. The
+browser has no wasmtime, and core WebAssembly there has **no fuel**. Rather than
+ship a second, weaker sandbox, we split by trust role:
+
+- **Server = authority.** wasmtime, fuel-metered, deterministic — the render of
+  record.
+- **Browser = liveness/preview.** The Facet runs on the browser's *own*
+  `WebAssembly` engine for instant feedback as the author edits controls.
+
+Both sides enforce the *same* guarantees where it matters. **Purity is structural
+on both:** instantiate with zero imports, and reject any module that *declares* an
+import before it can run (`WebAssembly.Module.imports`), mirroring wasmtime's
+import-free instantiation. Both speak the *same* ABI (D8): the browser host
+(`packages/facet-abi`) mirrors `run_map` exactly — identical stride/length/overflow
+checks, the same alloc-through-the-guest marshalling, little-endian `f32` in and
+`u32` tokens out. A **golden vector emitted by the proven native `run_map`** on the
+*real* Facet wasm pins the two implementations byte-for-byte (conformance test), so
+"preview == render" is verified, not assumed.
+
+**Metering without fuel.** A synchronous WASM infinite loop cannot be preempted on
+the main thread, so untrusted Facets execute inside a **Web Worker** under a
+wall-clock **timeout**; a Facet that overruns is `terminate()`d and surfaces a
+clean error, and a memory bomb is contained to the worker rather than the page.
+The correctness-critical marshaller is a pure synchronous function, isolated from
+the worker/timeout policy, so it is tested directly; a real never-returning Facet
+fixture proves the timeout actually kills a hang. Determinism holds for
+well-behaved Facets because core WASM arithmetic is bit-identical across engines
+and our Facets avoid NaN-payload-dependent branches (the engine's transcendentals
+already use `libm`, D7).
+
+**Proven end-to-end.** The engine bridge `mosaic-wasm` exposes `extract` and
+`compose` (the *same* Rust the server runs) to the browser. Extract-in-wasm is
+bit-identical to native `feature::extract` (incl. `libm::atan2f`), and the whole
+client pipeline — `extract` → Facet (via `facet-abi`) → `compose` — reproduces the
+authoritative native `render_ascii` over a golden image set. Preview is now a
+*checked* equal of the render, not a hope.
+
+## Open decisions (from the vision — deliberately not yet frozen)
+
+- *O1 (neighbor visibility) and O2 (ASCII feature vocabulary) are now settled —
+  see D5 and D6.*
+- **O3 — Facet DSL syntax & semantics.** Deferred by D3 until the contract holds.
+- **O4 — Cross-engine composition / blending.** How Facets combine once more
+  than one engine exists.
+- **O5 — Contract universality.** Which slots are genuinely domain-independent
+  vs. artifacts of the first domain (ASCII vs. data→art is the stress test). For
+  this reason the master `Tessera` trait is left as a documented sketch until the
+  concrete ASCII engine is built against the core.
+
+## Repository layout
+
+```
+crates/
+  mosaic-core/     # engine contract, feature vocabulary, Facet manifest, render model
+  glyph-atlas/     # shared no_std L2 glyph atlas + SSD matcher (engine + Facet, no drift)
+  mosaic-runtime/  # WASM host: pure, fuel-metered, memory-bounded Facet sandbox
+  tessera-ascii/   # the first engine (L0/L1 density+edges, L2 structural glyph-match)
+  mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose (built)
+apps/
+  web/             # Next.js shell: editor, controls, live preview, registry   (planned)
+facets/ramp/       # bootstrap Facet (Rust -> wasm): density ramp + edge glyphs
+facets/spin/       # adversarial Facet: run() never returns (browser-timeout test)
+facets/liar/       # adversarial Facet: alloc() returns a wild pointer (bounds test)
+facets/structural/ # L2 Facet: sub-cell patch -> nearest atlas glyph
+packages/
+  facet-abi/       # browser Facet host: mirrors run_map, timeout-Worker sandbox
+docs/              # this document and future design notes
+```
+
+## Undecided housekeeping
+
+- **License.** Not yet chosen; matters for a platform hosting community-authored
+  content. Tracked as an explicit open item before first publish.

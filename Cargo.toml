@@ -1,0 +1,16 @@
+# Mosaic — Rust workspace.
+# Each Tessera engine and the runtime live here as crates, compiled natively
+# (server) and to wasm32 (browser live-preview) from the same source.
+[workspace]
+resolver = "3"
+members = [
+    "crates/mosaic-core",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+
+[workspace.dependencies]
+# Shared dependency versions are declared here as the workspace grows, so every
+# crate pins the same version of each dependency.

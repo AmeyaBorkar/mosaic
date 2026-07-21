@@ -1,0 +1,9 @@
+# Normalize line endings: LF in the repository and in working copies everywhere,
+# so Linux CI, macOS, and Windows all agree (and generated goldens don't drift).
+* text=auto eol=lf
+
+# Shell scripts must be LF — a CRLF shebang breaks the interpreter.
+*.sh text eol=lf
+
+# Binary fixtures: never apply EOL conversion (it would corrupt the wasm).
+*.wasm binary

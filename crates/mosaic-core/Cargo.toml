@@ -1,0 +1,12 @@
+[package]
+name = "mosaic-core"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Domain-agnostic core of Mosaic: the Tessera engine contract, feature vocabulary, Facet manifest, and render model."
+publish = false
+
+[dependencies]
+# Intentionally std-only for now. Proc-macro crates (serde_derive, thiserror)
+# require a native linker, which is unavailable until the MSVC Build Tools land;
+# serde + derive will be added once the toolchain is complete.
