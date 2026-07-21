@@ -1,0 +1,18 @@
+[package]
+name = "tessera-ascii"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Mosaic's first Tessera: images → ASCII text (L0 luminance slice)."
+publish = false
+
+[dependencies]
+mosaic-core = { path = "../mosaic-core" }
+# Deterministic, pure-Rust libm: bit-identical transcendentals across platforms
+# and across the native/wasm builds (so preview == render).
+libm = "0.2"
+# Shared L2 glyph atlas + matcher, used identically here and in the wasm Facet.
+glyph-atlas = { path = "../glyph-atlas" }
+
+[dev-dependencies]
+mosaic-runtime = { path = "../mosaic-runtime" }

@@ -1,0 +1,14 @@
+[package]
+name = "facet-ramp"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Bootstrap Mosaic Facet (density ramp + edge glyphs) compiled to WASM."
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

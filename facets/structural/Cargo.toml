@@ -1,0 +1,18 @@
+[package]
+name = "facet-structural"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "L2 structural Mosaic Facet: matches each cell's sub-cell patch to the closest atlas glyph."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The SAME atlas + matcher the native engine uses — one definition, no drift.
+glyph-atlas = { path = "../../crates/glyph-atlas" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

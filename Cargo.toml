@@ -5,8 +5,13 @@
 resolver = "3"
 members = [
     "crates/mosaic-core",
+    "crates/glyph-atlas",
+    "crates/tessera-ascii",
     "crates/mosaic-runtime",
 ]
+# Facets compile to wasm32 only (no_std, guest ABI), so they are excluded from the
+# native workspace build and built explicitly with --target wasm32-unknown-unknown.
+exclude = ["facets/ramp", "facets/spin", "facets/liar", "facets/structural"]
 
 [workspace.package]
 edition = "2024"
