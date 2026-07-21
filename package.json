@@ -1,0 +1,10 @@
+{
+  "name": "mosaic",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.15.1",
+  "description": "Mosaic - a platform for community-authored visual methods. TypeScript shell over the Rust core (see Cargo.toml).",
+  "scripts": {
+    "test": "node --test packages/facet-abi/test/conformance.test.ts packages/facet-abi/test/adversarial.test.ts packages/facet-abi/test/timeout.test.ts"
+  }
+}

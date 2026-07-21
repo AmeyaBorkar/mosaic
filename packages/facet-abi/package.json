@@ -1,0 +1,13 @@
+{
+  "name": "@mosaic/facet-abi",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-side Mosaic Facet host: mirrors mosaic-runtime::run_map on the browser's native WebAssembly, sandboxed by a timeout Worker (see docs/architecture.md D9).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test test/conformance.test.ts test/adversarial.test.ts test/timeout.test.ts"
+  }
+}
