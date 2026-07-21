@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: CI only needs to read the repository contents.
+permissions:
+  contents: read
+
+# One in-flight run per ref; newer pushes cancel older, still-running ones.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust — fmt, clippy, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + wasm32)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt clippy
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test (workspace)
+        run: cargo test --workspace --all-features
+
+      - name: Engine + bridge compile to wasm32 (browser target)
+        run: cargo build -p glyph-atlas -p tessera-ascii -p mosaic-wasm --target wasm32-unknown-unknown
+
+      - name: Golden vectors are fresh
+        run: bash scripts/verify-fixtures.sh
+
+  web:
+    name: Web — facet-abi + mosaic-wasm (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + wasm32)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Build mosaic-wasm (nodejs target)
+        run: wasm-pack build crates/mosaic-wasm --target nodejs --dev --out-dir pkg
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Test (facet-abi + mosaic-wasm pipeline)
+        run: >
+          node --test
+          packages/facet-abi/test/conformance.test.ts
+          packages/facet-abi/test/adversarial.test.ts
+          packages/facet-abi/test/timeout.test.ts
+          crates/mosaic-wasm/test/pipeline.test.ts
