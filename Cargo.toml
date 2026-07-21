@@ -5,6 +5,7 @@
 resolver = "3"
 members = [
     "crates/mosaic-core",
+    "crates/mosaic-runtime",
 ]
 
 [workspace.package]

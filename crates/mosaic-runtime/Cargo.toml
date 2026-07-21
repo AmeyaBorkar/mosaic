@@ -1,0 +1,11 @@
+[package]
+name = "mosaic-runtime"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Mosaic's safe WASM host: executes pure, metered, sandboxed Facets."
+publish = false
+
+[dependencies]
+wasmtime = "47"
+anyhow = "1"
