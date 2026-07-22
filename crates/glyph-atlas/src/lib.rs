@@ -120,11 +120,30 @@ pub const ATLAS: &[Glyph] = &[
     },
 ];
 
-/// Ink value (`0.0` or `1.0`) of the glyph's sample at `(row, col)`.
-#[inline]
-fn ink(glyph: &Glyph, row: usize, col: usize) -> f32 {
-    let bit = (glyph.bits[row] >> (7 - col)) & 1;
-    if bit == 1 { 1.0 } else { 0.0 }
+/// Precomputed ink patches (`0.0`/`1.0`) for every atlas glyph, materialized once at
+/// compile time so [`match_glyph`] reads two contiguous arrays instead of extracting a
+/// bit per sample every cell. `0.0`/`1.0` are exactly representable and the SSD
+/// arithmetic is unchanged, so tokens stay bit-identical — do **not** reassociate or
+/// vectorize the reduction, which would change rounding and break native/wasm parity.
+static INK: [[f32; PATCH_SLOTS]; ATLAS.len()] = build_ink();
+
+const fn build_ink() -> [[f32; PATCH_SLOTS]; ATLAS.len()] {
+    let mut table = [[0.0f32; PATCH_SLOTS]; ATLAS.len()];
+    let mut g = 0;
+    while g < ATLAS.len() {
+        let mut row = 0;
+        while row < PATCH_ROWS {
+            let mut col = 0;
+            while col < PATCH_COLS {
+                let bit = (ATLAS[g].bits[row] >> (7 - col)) & 1;
+                table[g][row * PATCH_COLS + col] = if bit == 1 { 1.0 } else { 0.0 };
+                col += 1;
+            }
+            row += 1;
+        }
+        g += 1;
+    }
+    table
 }
 
 /// Return the codepoint of the atlas glyph closest to `patch` (a row-major
@@ -133,23 +152,33 @@ fn ink(glyph: &Glyph, row: usize, col: usize) -> f32 {
 /// input, mirroring the engine's defensive style). Ties resolve to the earliest
 /// atlas entry, identically on every target.
 pub fn match_glyph(patch: &[f32]) -> u32 {
+    // Zero-pad a short patch once, so the inner SSD loop carries no per-sample bounds
+    // check (the length check is hoisted out of the hot loop).
+    let mut buf = [0.0f32; PATCH_SLOTS];
+    let n = if patch.len() < PATCH_SLOTS {
+        patch.len()
+    } else {
+        PATCH_SLOTS
+    };
+    buf[..n].copy_from_slice(&patch[..n]);
+
     let mut best_cp = ATLAS[0].codepoint;
     let mut best_ssd = f32::INFINITY;
-    for glyph in ATLAS {
+    let mut g = 0;
+    while g < ATLAS.len() {
+        let ink = &INK[g];
         let mut ssd = 0.0f32;
-        let mut idx = 0usize;
-        for row in 0..PATCH_ROWS {
-            for col in 0..PATCH_COLS {
-                let p = if idx < patch.len() { patch[idx] } else { 0.0 };
-                let d = p - ink(glyph, row, col);
-                ssd += d * d;
-                idx += 1;
-            }
+        let mut i = 0;
+        while i < PATCH_SLOTS {
+            let d = buf[i] - ink[i];
+            ssd += d * d;
+            i += 1;
         }
         if ssd < best_ssd {
             best_ssd = ssd;
-            best_cp = glyph.codepoint;
+            best_cp = ATLAS[g].codepoint;
         }
+        g += 1;
     }
     best_cp
 }
