@@ -16,10 +16,22 @@ must contain it. The guarantees:
   `StoreLimits` caps on linear memory, tables, table elements, memories, and
   instances; module size is bounded before compilation. In the browser (which has
   no fuel), a Facet runs inside a **Web Worker** under a wall-clock **timeout** and
-  is forcibly terminated if it overruns; a memory bomb is contained to the worker.
+  is forcibly terminated if it overruns. A Facet must additionally declare a bounded
+  linear-memory maximum ≤ 16 MiB (rejected otherwise), which the browser enforces on
+  `memory.grow` — the analogue of the native memory cap — so a memory-bomb Facet is
+  contained, not merely raced against the timeout.
+- **Byte-aware allocation guards.** Feature extraction is bounded by a byte budget
+  (not a cell count), so the stride-64 structural path cannot be driven to a
+  multi-GB allocation; the guest bump allocators bounds-check and fail closed; and
+  untrusted output codepoints are stripped of control/bidi characters by `compose`.
 - **Determinism.** NaN payloads are canonicalized and relaxed-SIMD / threads /
   multi-memory are disabled, so execution is bit-identical across machines. Engine
-  transcendentals use `libm` for cross-platform reproducibility.
+  transcendentals use `libm` for cross-platform reproducibility. These are
+  *server-side* controls; the browser `WebAssembly` API cannot enforce
+  NaN-canonicalization or a relaxed-SIMD ban, so a Facet that depends on either can
+  diverge in the browser preview (the server render remains authoritative). The
+  planned Facet registry closes this with a submission-time conformance gate — see
+  the browser parity limits in `docs/architecture.md` (D9).
 - **Bounds-checked marshalling.** Every host↔guest crossing is bounds-checked and
   every size derived from untrusted input is overflow-checked before any
   allocation, on both the native (`mosaic-runtime`) and browser (`@mosaic/facet-abi`)

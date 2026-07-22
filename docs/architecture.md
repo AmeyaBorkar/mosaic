@@ -181,6 +181,28 @@ client pipeline — `extract` → Facet (via `facet-abi`) → `compose` — repr
 authoritative native `render_ascii` over a golden image set. Preview is now a
 *checked* equal of the render, not a hope.
 
+**Post-audit hardening.** An adversarial audit hardened the untrusted boundary. The
+browser now enforces a linear-memory cap the way the native `StoreLimits` does: a
+Facet must declare a bounded memory maximum ≤ 16 MiB (`@mosaic/facet-abi` rejects any
+that does not, and the bundled Facets are built with `--max-memory`), which the
+engine enforces on `memory.grow` — so a memory-bomb Facet is contained, not merely
+raced against the timeout. Feature extraction is byte-budgeted (not cell-counted) so
+the stride-64 L2 path cannot be driven to a multi-GB allocation; the guest bump
+allocators bounds-check; `compose` masks control/bidi codepoints out of untrusted
+output; and the browser host checks export arities and i32 ranges to match the native
+`run_map`.
+
+**Known browser parity limits.** Three native determinism controls have no
+`WebAssembly` API equivalent and so cannot be *enforced* in the browser: relaxed-SIMD
+rejection, NaN-payload canonicalization, and a deterministic instruction (fuel)
+budget — the browser bounds time by a wall-clock timeout instead. A Facet that uses
+relaxed-SIMD, branches on NaN bits, or overruns the timeout can therefore diverge
+from (or be rejected by) the authoritative server render. The planned Facet registry
+closes this with a submission-time conformance gate (a decode-pass that rejects the
+disallowed features + a golden-token sweep against the server); until then the server
+render is the record of truth, and the browser preview is exact only for Facets that
+avoid these.
+
 ## Open decisions (from the vision — deliberately not yet frozen)
 
 - *O1 (neighbor visibility) and O2 (ASCII feature vocabulary) are now settled —
