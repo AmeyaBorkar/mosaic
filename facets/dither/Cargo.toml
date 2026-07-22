@@ -1,0 +1,18 @@
+[package]
+name = "facet-dither"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Propagation Mosaic Facet: 1-bit Floyd-Steinberg error-diffusion dithering."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The SAME error-diffusion routine the native engine uses - one definition, no drift.
+dither = { path = "../../crates/dither" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
