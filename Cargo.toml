@@ -13,6 +13,7 @@ members = [
     "crates/mosaic-wasm",
     "crates/mosaic-compose",
     "crates/mosaic-vm",
+    "crates/mosaic-dsl",
 ]
 # Facets compile to wasm32 only (no_std, guest ABI), so they are excluded from the
 # native workspace build and built explicitly with --target wasm32-unknown-unknown.

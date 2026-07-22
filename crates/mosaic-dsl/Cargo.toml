@@ -1,0 +1,12 @@
+[package]
+name = "mosaic-dsl"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "The Mosaic Facet DSL (O3): a small expression language compiled to mosaic-vm bytecode."
+publish = false
+
+[dependencies]
+# The bytecode ISA (opcodes + program format) and the validator the compiler emits against
+# and self-checks with.
+mosaic-vm = { path = "../mosaic-vm" }
