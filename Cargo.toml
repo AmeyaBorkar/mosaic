@@ -8,6 +8,7 @@ members = [
     "crates/glyph-atlas",
     "crates/dither",
     "crates/tessera-ascii",
+    "crates/tessera-spectral",
     "crates/mosaic-runtime",
     "crates/mosaic-wasm",
 ]

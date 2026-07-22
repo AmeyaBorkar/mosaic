@@ -1,0 +1,22 @@
+[package]
+name = "tessera-spectral"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Mosaic's second Tessera: audio (PCM) → spectrogram text art — the contract-universality proof (O5)."
+publish = false
+
+[dependencies]
+mosaic-core = { path = "../mosaic-core" }
+# Deterministic, pure-Rust libm: bit-identical transcendentals (cosf for the Hann
+# window and Goertzel band coefficients, powf for log-spaced band centers) across the
+# native and wasm builds, matching tessera-ascii's discipline so preview == render.
+libm = "0.2"
+# The shared error-diffusion routine — the exact one the ASCII engine and the dither
+# Facet run — reused here so a propagation Facet is proven to work unchanged on audio.
+dither = { path = "../dither" }
+
+[dev-dependencies]
+# Executes the *existing* image Facets (facet-ramp, facet-dither) in the real sandbox
+# over this engine's features — the cross-domain universality proof.
+mosaic-runtime = { path = "../mosaic-runtime" }

@@ -1071,6 +1071,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-spectral"
+version = "0.0.0"
+dependencies = [
+ "dither",
+ "libm",
+ "mosaic-core",
+ "mosaic-runtime",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
