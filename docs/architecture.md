@@ -77,6 +77,15 @@ units along a declared kernel and traversal order. The Facet stays pure; the
 engine owns the ordering, so it stays deterministic. This isolates the only real
 cost instead of imposing it on every Facet.
 
+**Now implemented.** The first propagation method — 1-bit Floyd–Steinberg
+error-diffusion dithering — ships via a dedicated 2-D Facet ABI (D10): the engine
+hands the Facet the grid shape and the Facet runs the sequential feedback loop inside
+the sandbox, deterministically. The kernel lives in one shared `no_std` crate
+(`crates/dither`) compiled into both the native engine (`render_dither`) and the wasm
+Facet (`facets/dither`), so the sequential path is bit-identical native and wasm —
+proven by a 64-random-image sandboxed≡native sweep and the browser≡native golden. (A
+region of flat grey stipples into a mix of glyphs — impossible with pure gather.)
+
 ### D6 — First feature vocabulary (ASCII): L0 + L1 + L2 *(settled — O2)*
 The ASCII Tessera's vocabulary ceiling is:
 - **L0 — Luminance** (cell mean, min/max/variance): density ramps.
@@ -203,6 +212,18 @@ disallowed features + a golden-token sweep against the server); until then the s
 render is the record of truth, and the browser preview is exact only for Facets that
 avoid these.
 
+### D10 — Propagation ABI: `run2d` for feedback methods *(settled)*
+Gather Facets export `run(in_ptr, out_ptr, ncells, stride)` (D8) and see no grid
+geometry — right for the embarrassingly-parallel path. Feedback methods (error
+diffusion) need neighbour positions, so a propagation Facet instead exports
+`run2d(in_ptr, out_ptr, cols, rows, stride)` and is handed the 2-D shape;
+`mosaic-runtime::run_map_2d` and `@mosaic/facet-abi::runFacetMap2d` invoke it. This is
+**additive** — gather Facets are unchanged — and both hosts share the *same*
+marshalling as the gather ABI (bounds/overflow checks, zero imports, memory cap), so
+the propagation path inherits every sandbox guarantee. A Facet declares which ABI it
+implements by which entry point it exports; the host requires exactly one of
+`run`/`run2d` to be present.
+
 ## Open decisions (from the vision — deliberately not yet frozen)
 
 - *O1 (neighbor visibility) and O2 (ASCII feature vocabulary) are now settled —
@@ -221,6 +242,7 @@ avoid these.
 crates/
   mosaic-core/     # engine contract, feature vocabulary, Facet manifest, render model
   glyph-atlas/     # shared no_std L2 glyph atlas + SSD matcher (engine + Facet, no drift)
+  dither/          # shared no_std Floyd-Steinberg error-diffusion (engine + Facet, no drift)
   mosaic-runtime/  # WASM host: pure, fuel-metered, memory-bounded Facet sandbox
   tessera-ascii/   # the first engine (L0/L1 density+edges, L2 structural glyph-match)
   mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose (built)
@@ -230,6 +252,7 @@ facets/ramp/       # bootstrap Facet (Rust -> wasm): density ramp + edge glyphs
 facets/spin/       # adversarial Facet: run() never returns (browser-timeout test)
 facets/liar/       # adversarial Facet: alloc() returns a wild pointer (bounds test)
 facets/structural/ # L2 Facet: sub-cell patch -> nearest atlas glyph
+facets/dither/     # propagation Facet: 1-bit error-diffusion dithering (run2d)
 packages/
   facet-abi/       # browser Facet host: mirrors run_map, timeout-Worker sandbox
 docs/              # this document and future design notes

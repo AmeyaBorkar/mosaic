@@ -53,8 +53,9 @@ The full pipeline is implemented and proven end-to-end, **native and browser**:
   same Rust the server runs).
 - **`packages/facet-abi`** — the browser-side Facet host: mirrors the native ABI
   and sandboxes untrusted Facets in a timeout Worker.
-- **Facets** — `ramp` (density + edges) and `structural` (L2 glyph-match), plus
-  `spin`/`liar` adversarial fixtures for the sandbox tests.
+- **Facets** — `ramp` (density + edges), `structural` (L2 glyph-match), and `dither`
+  (1-bit Floyd–Steinberg error-diffusion — the propagation/feedback class via the 2-D
+  `run2d` ABI), plus `spin`/`liar` adversarial fixtures for the sandbox tests.
 
 **Verification:** 49 Rust tests + 16 JS tests, `clippy -D warnings` clean, with
 adversarial sandbox tests and native≡wasm conformance sweeps over random images.
