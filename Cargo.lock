@@ -729,6 +729,9 @@ name = "mosaic-wasm"
 version = "0.0.0"
 dependencies = [
  "js-sys",
+ "libm",
+ "mosaic-core",
+ "mosaic-runtime",
  "tessera-ascii",
  "tessera-spectral",
  "wasm-bindgen",

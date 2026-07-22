@@ -16,6 +16,17 @@ tessera-ascii = { path = "../tessera-ascii" }
 # The second engine, compiled to the same wasm32 bridge so audio features extract in
 # the browser exactly as on the server (preview == render for the spectral engine too).
 tessera-spectral = { path = "../tessera-spectral" }
+# The substrate: the composition algebra (Canvas/Layer/Blend) the browser Canvas binding
+# exposes, and the shared text composition.
+mosaic-core = { path = "../mosaic-core" }
 wasm-bindgen = "0.2"
 # Zero-copy Float32Array view of the feature buffer (avoids cloning it on read).
 js-sys = "0.3"
+
+[dev-dependencies]
+# Runs the real facet-ramp in the sandbox to produce genuine cross-engine layer data for
+# the composition golden and the native composition test.
+mosaic-runtime = { path = "../mosaic-runtime" }
+# Deterministic sinf for the golden's chirp signal (cross-platform reproducible, so
+# verify-fixtures.sh stays green on CI).
+libm = "0.2"

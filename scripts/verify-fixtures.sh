@@ -12,11 +12,13 @@ set -euo pipefail
 cargo run --quiet -p mosaic-runtime   --example emit_golden
 cargo run --quiet -p tessera-ascii    --example emit_render_golden
 cargo run --quiet -p tessera-spectral --example emit_spectral_golden
+cargo run --quiet -p mosaic-wasm      --example emit_composite_golden
 
 if ! git diff --exit-code -- \
     packages/facet-abi/test/golden.json \
     crates/mosaic-wasm/test/render_golden.json \
-    crates/mosaic-wasm/test/spectral_golden.json; then
+    crates/mosaic-wasm/test/spectral_golden.json \
+    crates/mosaic-wasm/test/composite_golden.json; then
   echo "::error::Golden vectors are stale. Re-run the emit_* examples and commit the result." >&2
   exit 1
 fi
