@@ -712,6 +712,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mosaic-compose"
+version = "0.0.0"
+dependencies = [
+ "libm",
+ "mosaic-core",
+ "mosaic-runtime",
+ "serde",
+ "serde_json",
+ "tessera-ascii",
+ "tessera-spectral",
+]
+
+[[package]]
 name = "mosaic-core"
 version = "0.0.0"
 

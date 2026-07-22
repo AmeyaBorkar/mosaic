@@ -1,0 +1,22 @@
+[package]
+name = "mosaic-compose"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Declarative, shareable Mosaic Compositions (O4.1): a serialized layer stack rendered via the composition algebra."
+publish = false
+
+[dependencies]
+mosaic-core = { path = "../mosaic-core" }
+# The shareable format: a Composition serializes to JSON so the registry can store it and
+# the web shell can render it. serde is the fitting standard here, not an ill-fitting dep.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+# The end-to-end integration test resolves layers through the real engines + sandbox,
+# rendering an actual cross-engine declarative composition.
+mosaic-runtime = { path = "../mosaic-runtime" }
+tessera-ascii = { path = "../tessera-ascii" }
+tessera-spectral = { path = "../tessera-spectral" }
+libm = "0.2"
