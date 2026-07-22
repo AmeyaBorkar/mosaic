@@ -250,20 +250,43 @@ transcendental, no `mul_add`), so the STFT is bit-reproducible — and
 bit-identical to native, giving this engine the same preview == render guarantee as the
 ASCII engine, end to end.
 
+### D12 — Composition algebra: a painter's-algorithm Canvas *(settled — O4)*
+Composition — combining whole renders into one artifact — is a Mosaic-substrate concern,
+"built once", not an engine feature. `mosaic-core::composite` is the primitive: a `Canvas`
+built up by `place(layer, row_off, col_off, blend)` calls (painter's algorithm). One
+primitive unifies **overlay** (place at the origin), **layout / tiling** (place at an
+offset, clipping), and **masking** (per-cell `Layer` coverage). A glyph cell has no true
+alpha, so partial coverage resolves through an ordered Bayer dither
+(`Blend::StippleOver`) — perceptual blending of discrete glyphs with no impossible
+half-glyph; `Over`/`Under`/`Replace` cover crisp compositing.
+
+It is domain-agnostic (operates only on `u32` output tokens, so an image render and an
+audio render composite identically) and safe: `Canvas::into_text` routes every surviving
+cell through `compose_codepoints`, so a composed artifact inherits the untrusted-glyph
+boundary and runs no untrusted code — the Facets already executed in the sandbox; this is
+pure host-side grid math on their outputs. Deterministic (the Bayer matrix is constant; no
+transcendentals), so the browser `Canvas` binding reproduces native composition
+byte-for-byte (`composite.test.ts`) — proven on a genuine cross-engine artifact (an image
+ASCII render stacked with an audio spectrogram) plus energy-driven `StippleOver`.
+
+This primitive is the foundation a declarative, registry-shareable Composition (a
+serialized layer stack the platform renders) will wrap — the natural O4 follow-on.
+
 ## Open decisions (from the vision — deliberately not yet frozen)
 
-- *O1 (neighbor visibility), O2 (ASCII feature vocabulary), and O5 (contract
-  universality) are now settled — see D5, D6, and D11.*
+- *O1 (neighbor visibility), O2 (ASCII feature vocabulary), O4 (cross-engine
+  composition), and O5 (contract universality) are now settled — see D5, D6, D11, D12.*
 - **O3 — Facet DSL syntax & semantics.** Deferred by D3 until the contract holds. Two
   engines now share it unchanged (D11), so a DSL is better-informed — but still deferred.
-- **O4 — Cross-engine composition / blending.** How Facets combine once more than one
-  engine exists — **now unblocked** by the second engine (D11), not yet designed.
+- **O4.1 — Declarative, shareable Composition.** D12 built the compositor primitive; a
+  serialized layer stack the registry can store and the platform renders is the follow-on
+  (pairs with the registry).
 
 ## Repository layout
 
 ```
 crates/
-  mosaic-core/     # engine contract, feature vocab, Facet manifest, shared text composition (slot 5)
+  mosaic-core/     # engine contract, feature vocab, manifest, text composition (slot 5) + composition algebra (O4)
   glyph-atlas/     # shared no_std L2 glyph atlas + SSD matcher (engine + Facet, no drift)
   dither/          # shared no_std Floyd-Steinberg error-diffusion (engine + Facet, no drift)
   mosaic-runtime/  # WASM host: pure, fuel-metered, memory-bounded Facet sandbox
