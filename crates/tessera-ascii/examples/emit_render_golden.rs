@@ -13,7 +13,9 @@
 use std::fs;
 use std::path::Path;
 
-use tessera_ascii::{Grid, ImageRef, Options, feature, render_ascii, render_structural};
+use tessera_ascii::{
+    Grid, ImageRef, Options, feature, render_ascii, render_dither, render_structural,
+};
 
 /// Deterministic xorshift PRNG (matches the engine's test PRNG) so the golden is
 /// reproducible without `Math.random`/`Date`.
@@ -61,6 +63,8 @@ fn main() {
         let text = render_ascii(&img, &opts).expect("render");
         let structural_text =
             render_structural(&img, opts.cols, opts.cell_aspect).expect("render structural");
+        let dither_text =
+            render_dither(&img, opts.cols, opts.cell_aspect).expect("render dither");
         let grid = Grid::new(case.w, case.h, opts.cols, opts.cell_aspect);
         let feats = feature::extract(&img, &grid).expect("extract features");
 
@@ -79,8 +83,12 @@ fn main() {
         ));
         json.push_str(&format!("      \"text\": \"{}\",\n", json_escape(&text)));
         json.push_str(&format!(
-            "      \"structuralText\": \"{}\"\n",
+            "      \"structuralText\": \"{}\",\n",
             json_escape(&structural_text)
+        ));
+        json.push_str(&format!(
+            "      \"ditherText\": \"{}\"\n",
+            json_escape(&dither_text)
         ));
         json.push_str(if ci + 1 == cases.len() {
             "    }\n"

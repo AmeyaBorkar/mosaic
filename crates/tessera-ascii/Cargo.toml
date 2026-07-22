@@ -13,6 +13,8 @@ mosaic-core = { path = "../mosaic-core" }
 libm = "0.2"
 # Shared L2 glyph atlas + matcher, used identically here and in the wasm Facet.
 glyph-atlas = { path = "../glyph-atlas" }
+# Shared error-diffusion routine, used identically here and in the wasm Facet.
+dither = { path = "../dither" }
 
 [dev-dependencies]
 mosaic-runtime = { path = "../mosaic-runtime" }

@@ -95,6 +95,38 @@ pub fn render_structural(image: &ImageRef, cols: u32, cell_aspect: f32) -> Resul
     Ok(compose_codepoints(buf.cols, buf.rows, &codepoints))
 }
 
+/// Render an image to ASCII using **error-diffusion dithering** — the propagation
+/// method class (D5) the parallel gather model cannot express. Each cell's luminance
+/// is quantized to 1 bit and the quantization error is diffused to later cells via
+/// the shared [`dither::floyd_steinberg`], so a region of flat grey stipples into a
+/// mix of glyphs. This is the native reference for the `dither` Facet — the same
+/// shared routine both run, so preview == render.
+pub fn render_dither(image: &ImageRef, cols: u32, cell_aspect: f32) -> Result<String, Error> {
+    if cols == 0 {
+        return Err(Error::ZeroColumns);
+    }
+    let grid = Grid::new(image.width(), image.height(), cols, cell_aspect);
+    let cells = (grid.cols() as usize)
+        .checked_mul(grid.rows() as usize)
+        .ok_or(Error::DimensionOverflow)?;
+    if cells > MAX_CELLS {
+        return Err(Error::TooManyCells {
+            cells,
+            max: MAX_CELLS,
+        });
+    }
+    let mut buf = feature::extract(image, &grid)?;
+    let mut out = vec![0u32; cells];
+    dither::floyd_steinberg(
+        &mut buf.data,
+        buf.cols as usize,
+        buf.rows as usize,
+        buf.stride as usize,
+        &mut out,
+    );
+    Ok(compose_codepoints(buf.cols, buf.rows, &out))
+}
+
 /// Compose per-cell output codepoints (produced by a Facet) into an ASCII string,
 /// row-major with `\n` between rows.
 ///
@@ -982,5 +1014,28 @@ mod tests {
             feature::extract_structural(&img, &grid),
             Err(Error::FeatureBufferTooLarge { .. })
         ));
+    }
+
+    // --- Propagation: error-diffusion dithering ---
+
+    #[test]
+    fn dither_solid_levels_and_stipple() {
+        // Solid white -> all '@'; solid black -> all ' '.
+        let white = solid(8, 8, (255, 255, 255));
+        let out = render_dither(&ImageRef::new(8, 8, &white).unwrap(), 4, 1.0).unwrap();
+        assert!(out.chars().filter(|c| *c != '\n').all(|c| c == '@'));
+        let black = solid(8, 8, (0, 0, 0));
+        let out = render_dither(&ImageRef::new(8, 8, &black).unwrap(), 4, 1.0).unwrap();
+        assert!(out.chars().filter(|c| *c != '\n').all(|c| c == ' '));
+
+        // A flat mid-grey stipples into a mix of both glyphs (impossible with pure
+        // gather) and is deterministic.
+        let grey = solid(16, 16, (128, 128, 128));
+        let img = ImageRef::new(16, 16, &grey).unwrap();
+        let out = render_dither(&img, 8, 1.0).unwrap();
+        let glyphs: Vec<char> = out.chars().filter(|c| *c != '\n').collect();
+        assert!(glyphs.contains(&'@'));
+        assert!(glyphs.contains(&' '));
+        assert_eq!(render_dither(&img, 8, 1.0).unwrap(), out);
     }
 }

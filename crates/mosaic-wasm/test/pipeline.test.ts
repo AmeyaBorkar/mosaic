@@ -15,7 +15,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { compileFacet, runFacetMap } from "../../../packages/facet-abi/src/index.ts";
+import {
+  compileFacet,
+  runFacetMap,
+  runFacetMap2d,
+} from "../../../packages/facet-abi/src/index.ts";
 
 const require = createRequire(import.meta.url);
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -59,6 +63,7 @@ interface RenderCase {
   features: number[];
   text: string;
   structuralText: string;
+  ditherText: string;
 }
 const golden = JSON.parse(readFileSync(here("./render_golden.json"), "utf8")) as {
   cellAspect: number;
@@ -69,6 +74,9 @@ const rampWasm = readFileSync(
 );
 const structuralWasm = readFileSync(
   here("../../../packages/facet-abi/test/fixtures/facet_structural.wasm"),
+);
+const ditherWasm = readFileSync(
+  here("../../../packages/facet-abi/test/fixtures/facet_dither.wasm"),
 );
 
 test("extract-in-wasm reproduces native features bit-for-bit", () => {
@@ -144,6 +152,28 @@ test("full structural (L2) browser pipeline matches the native render", async ()
       const tokens = runFacetMap(structuralModule, fb.data, fb.ncells, fb.stride);
       const text = wasm.compose(fb.cols, fb.rows, tokens);
       assert.equal(text, c.structuralText, `${c.name}: structural browser render != native`);
+    } finally {
+      fb.free();
+    }
+  }
+});
+
+test("full dither (propagation) browser pipeline matches the native render", async () => {
+  const ditherModule = await compileFacet(ditherWasm);
+  for (const c of golden.cases) {
+    const fb = wasm.extract_features(
+      Uint8Array.from(c.rgba),
+      c.width,
+      c.height,
+      c.cols,
+      golden.cellAspect,
+    );
+    try {
+      // The 2-D ABI: hand the Facet the grid shape so its feedback loop can address
+      // neighbours. L0 luminance is slot 0 of the stride-3 buffer.
+      const tokens = runFacetMap2d(ditherModule, fb.data, fb.cols, fb.rows, fb.stride);
+      const text = wasm.compose(fb.cols, fb.rows, tokens);
+      assert.equal(text, c.ditherText, `${c.name}: dither browser render != native`);
     } finally {
       fb.free();
     }

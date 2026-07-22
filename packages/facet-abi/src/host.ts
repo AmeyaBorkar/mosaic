@@ -97,11 +97,10 @@ export function checkMemoryLimits(bytes: BufferSource): void {
   }
 }
 
-/** Required exports and their kinds, matching what `run_map` looks up. */
+/** Structural exports every Facet must have, regardless of its map entry point. */
 const REQUIRED_EXPORTS: ReadonlyArray<readonly [string, WebAssembly.ImportExportKind]> = [
   ["memory", "memory"],
   ["alloc", "function"],
-  ["run", "function"],
 ];
 
 /**
@@ -131,6 +130,13 @@ export function validateFacetModule(module: WebAssembly.Module): void {
         `Facet export '${name}' must be a ${kind}, found ${got}`,
       );
     }
+  }
+  // A Facet must have exactly one map entry point: `run` (gather ABI) or `run2d`
+  // (propagation / 2-D ABI, D5). Its arity is checked when it is invoked.
+  if (exports.get("run") !== "function" && exports.get("run2d") !== "function") {
+    throw new FacetAbiError(
+      "Facet must export a 'run' or 'run2d' entry point (function)",
+    );
   }
 }
 
