@@ -1,0 +1,19 @@
+[package]
+name = "facet-interp"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "The Mosaic DSL interpreter Facet (O3): runs a validated mosaic-vm bytecode program in the sandbox."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The shared, forbid-unsafe interpreter — compiled here into the untrusted wasm Facet, and
+# into the host as a reference. One implementation, no drift.
+mosaic-vm = { path = "../../crates/mosaic-vm" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

@@ -153,6 +153,7 @@ impl Sandbox {
         limits: Limits,
         features: &[f32],
         ncells: usize,
+        setup: impl FnOnce(&mut Store<HostState>, &Instance) -> Result<()>,
         run_call: impl FnOnce(&mut Store<HostState>, &Instance, i32, i32) -> Result<()>,
     ) -> Result<Vec<u32>> {
         // Size every buffer up front, rejecting overflow or anything beyond 32-bit
@@ -163,6 +164,9 @@ impl Sandbox {
 
         let mut store = self.fresh_store(limits)?;
         let instance = Instance::new(&mut store, &facet.module, &[])?;
+        // Optional pre-run setup (e.g. loading a bytecode program into the guest) before any
+        // feature marshalling. A no-op for the plain map ABIs.
+        setup(&mut store, &instance)?;
         let memory = instance
             .get_memory(&mut store, "memory")
             .ok_or_else(|| anyhow!("Facet does not export 'memory'"))?;
@@ -244,6 +248,7 @@ impl Sandbox {
             limits,
             features,
             ncells,
+            |_, _| Ok(()),
             |store, instance, in_ptr, out_ptr| {
                 let run =
                     instance.get_typed_func::<(i32, i32, i32, i32), ()>(&mut *store, "run")?;
@@ -291,6 +296,7 @@ impl Sandbox {
             limits,
             features,
             ncells,
+            |_, _| Ok(()),
             |store, instance, in_ptr, out_ptr| {
                 let run = instance
                     .get_typed_func::<(i32, i32, i32, i32, i32), ()>(&mut *store, "run2d")?;
@@ -298,6 +304,70 @@ impl Sandbox {
                     &mut *store,
                     (in_ptr, out_ptr, cols_i32, rows_i32, stride_i32),
                 )?;
+                Ok(())
+            },
+        )
+    }
+
+    /// Run a **programmable** Facet — the DSL bytecode interpreter (O3). Loads a validated
+    /// bytecode `program` into the guest (via its `load_program(ptr, len) -> i32` export,
+    /// which must return `0`), then runs the standard gather ABI over `features`. The
+    /// interpreter re-validates the program guest-side before executing it, so a malformed
+    /// or rejected program yields an `Err`, never a host panic — the same sandbox
+    /// guarantees as [`run_map`](Self::run_map).
+    pub fn run_program(
+        &self,
+        facet: &Facet,
+        limits: Limits,
+        program: &[u8],
+        features: &[f32],
+        ncells: usize,
+        stride: usize,
+    ) -> Result<Vec<u32>> {
+        if stride == 0 {
+            return Err(anyhow!("stride must be non-zero"));
+        }
+        let expected = ncells
+            .checked_mul(stride)
+            .ok_or_else(|| anyhow!("ncells * stride overflows"))?;
+        if features.len() != expected {
+            return Err(anyhow!(
+                "features length {} != ncells * stride ({expected})",
+                features.len()
+            ));
+        }
+        let ncells_i32: i32 = ncells.try_into().map_err(|_| anyhow!("too many cells"))?;
+        let stride_i32: i32 = stride.try_into().map_err(|_| anyhow!("stride too large"))?;
+        let prog_len_i32: i32 = checked_wasm_len(program.len(), 1)?
+            .try_into()
+            .map_err(|_| anyhow!("program too large"))?;
+
+        self.run_marshalled(
+            facet,
+            limits,
+            features,
+            ncells,
+            |store, instance| {
+                let alloc = instance.get_typed_func::<i32, i32>(&mut *store, "alloc")?;
+                let memory = instance
+                    .get_memory(&mut *store, "memory")
+                    .ok_or_else(|| anyhow!("interpreter does not export 'memory'"))?;
+                let prog_ptr = alloc.call(&mut *store, prog_len_i32)?;
+                memory.write(&mut *store, prog_ptr as usize, program)?;
+                let load =
+                    instance.get_typed_func::<(i32, i32), i32>(&mut *store, "load_program")?;
+                let status = load.call(&mut *store, (prog_ptr, prog_len_i32))?;
+                if status != 0 {
+                    return Err(anyhow!(
+                        "interpreter rejected the bytecode program (status {status})"
+                    ));
+                }
+                Ok(())
+            },
+            |store, instance, in_ptr, out_ptr| {
+                let run =
+                    instance.get_typed_func::<(i32, i32, i32, i32), ()>(&mut *store, "run")?;
+                run.call(&mut *store, (in_ptr, out_ptr, ncells_i32, stride_i32))?;
                 Ok(())
             },
         )
