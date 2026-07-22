@@ -19,10 +19,12 @@ fn panic(_: &PanicInfo) -> ! {
 /// A small aligned arena so `alloc` is a real, working export (validation checks
 /// that `alloc` exists; the timeout test still marshals input before calling
 /// `run`). Accessed only through the host ABI, hence "dead" to the compiler.
+const ARENA_LEN: usize = 64 * 1024;
+
 #[allow(dead_code)]
 #[repr(align(16))]
-struct Arena([u8; 64 * 1024]);
-static mut ARENA: Arena = Arena([0; 64 * 1024]);
+struct Arena([u8; ARENA_LEN]);
+static mut ARENA: Arena = Arena([0; ARENA_LEN]);
 static mut BUMP: usize = 0;
 
 #[no_mangle]
@@ -30,7 +32,11 @@ pub extern "C" fn alloc(size: i32) -> i32 {
     unsafe {
         let base = core::ptr::addr_of_mut!(ARENA) as usize;
         let off = (BUMP + 7) & !7;
-        BUMP = off + size.max(0) as usize;
+        let end = off.saturating_add(size.max(0) as usize);
+        if end > ARENA_LEN {
+            return -1;
+        }
+        BUMP = end;
         (base + off) as i32
     }
 }

@@ -100,8 +100,11 @@ cargo fmt --all
 **Rebuild the guest Facet wasm fixtures** (only when a Facet's source changes):
 
 ```sh
+# RUSTFLAGS caps each Facet's linear memory at 16 MiB, so the browser enforces the
+# same ceiling the native sandbox does (a memory-bomb Facet cannot exceed it).
 for f in ramp spin liar structural; do
-  cargo build --manifest-path "facets/$f/Cargo.toml" --target wasm32-unknown-unknown --release
+  RUSTFLAGS="-C link-arg=--max-memory=16777216" \
+    cargo build --manifest-path "facets/$f/Cargo.toml" --target wasm32-unknown-unknown --release
 done
 # then copy the outputs into the fixture locations and refresh the goldens:
 cargo run -p mosaic-runtime --example emit_golden

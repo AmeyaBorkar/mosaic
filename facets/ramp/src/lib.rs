@@ -21,22 +21,31 @@ fn panic(_: &PanicInfo) -> ! {
 }
 
 /// A 16-byte-aligned bump arena in linear memory for host↔guest buffer exchange.
-/// The bytes are accessed through raw pointers (via the host ABI), so the field
-/// looks unread to the compiler.
+/// Sized to hold a render's marshalled input plus output up to the engine's
+/// `MAX_FEATURE_BYTES` (8 MiB) budget. Accessed through raw pointers via the host
+/// ABI, so it looks unread to the compiler.
+const ARENA_LEN: usize = 12 * 1024 * 1024;
+
 #[allow(dead_code)]
 #[repr(align(16))]
-struct Arena([u8; 4 * 1024 * 1024]);
-static mut ARENA: Arena = Arena([0; 4 * 1024 * 1024]);
+struct Arena([u8; ARENA_LEN]);
+static mut ARENA: Arena = Arena([0; ARENA_LEN]);
 static mut BUMP: usize = 0;
 
 /// Reserve `size` bytes in the arena and return an 8-byte-aligned linear-memory
-/// offset. A minimal bump allocator — the host calls this to place buffers.
+/// offset, or `-1` if the arena is exhausted — a wild pointer the host rejects
+/// (bounds-checked), so an oversized render fails cleanly instead of overrunning
+/// the guest's own memory.
 #[no_mangle]
 pub extern "C" fn alloc(size: i32) -> i32 {
     unsafe {
         let base = core::ptr::addr_of_mut!(ARENA) as usize;
         let off = (BUMP + 7) & !7;
-        BUMP = off + size.max(0) as usize;
+        let end = off.saturating_add(size.max(0) as usize);
+        if end > ARENA_LEN {
+            return -1;
+        }
+        BUMP = end;
         (base + off) as i32
     }
 }

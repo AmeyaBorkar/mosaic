@@ -37,7 +37,10 @@ The guest Facet wasm files under `crates/tessera-ascii/tests/` and
 Facet's source, rebuild it and refresh the golden vectors, then commit the result:
 
 ```sh
-cargo build --manifest-path facets/<name>/Cargo.toml --target wasm32-unknown-unknown --release
+# The RUSTFLAGS caps the Facet's linear memory at 16 MiB (browser parity with the
+# native sandbox cap); required for @mosaic/facet-abi to accept the module.
+RUSTFLAGS="-C link-arg=--max-memory=16777216" \
+  cargo build --manifest-path facets/<name>/Cargo.toml --target wasm32-unknown-unknown --release
 # copy the wasm into the fixture locations, then:
 cargo run -p mosaic-runtime --example emit_golden
 cargo run -p tessera-ascii  --example emit_render_golden
