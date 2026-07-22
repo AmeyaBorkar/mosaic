@@ -142,40 +142,24 @@ impl Sandbox {
         Ok(out)
     }
 
-    /// Run a Facet that maps a per-cell feature buffer to one `u32` output token
-    /// per cell (for ASCII, a glyph codepoint). See the module docs for the ABI.
-    ///
-    /// `features` must be exactly `ncells * stride` values. All boundary crossings
-    /// are bounds-checked by wasmtime, so a Facet returning a bogus pointer yields
-    /// an `Err`, never a host panic. Zero imports and full metering apply.
-    pub fn run_map(
+    /// Shared marshalling for the Facet map ABIs: instantiate with zero imports, write
+    /// `features` into the guest, allocate the `ncells`-token output, invoke `run_call`
+    /// (which looks up and calls the right `run`/`run2d` export), and read the tokens
+    /// back. All bounds/overflow checks and the little-endian fast paths live here so
+    /// the gather and 2-D ABIs cannot drift.
+    fn run_marshalled(
         &self,
         facet: &Facet,
         limits: Limits,
         features: &[f32],
         ncells: usize,
-        stride: usize,
+        run_call: impl FnOnce(&mut Store<HostState>, &Instance, i32, i32) -> Result<()>,
     ) -> Result<Vec<u32>> {
-        if stride == 0 {
-            return Err(anyhow!("stride must be non-zero"));
-        }
-        let expected = ncells
-            .checked_mul(stride)
-            .ok_or_else(|| anyhow!("ncells * stride overflows"))?;
-        if features.len() != expected {
-            return Err(anyhow!(
-                "features length {} != ncells * stride ({expected})",
-                features.len()
-            ));
-        }
-
         // Size every buffer up front, rejecting overflow or anything beyond 32-bit
         // wasm addressing *before* allocating — an untrusted size can never drive a
         // host allocation; it becomes a clean error instead.
         let in_byte_len = checked_wasm_len(features.len(), 4)?;
         let out_byte_len = checked_wasm_len(ncells, 4)?;
-        let ncells_i32: i32 = ncells.try_into().map_err(|_| anyhow!("too many cells"))?;
-        let stride_i32: i32 = stride.try_into().map_err(|_| anyhow!("stride too large"))?;
 
         let mut store = self.fresh_store(limits)?;
         let instance = Instance::new(&mut store, &facet.module, &[])?;
@@ -183,7 +167,6 @@ impl Sandbox {
             .get_memory(&mut store, "memory")
             .ok_or_else(|| anyhow!("Facet does not export 'memory'"))?;
         let alloc = instance.get_typed_func::<i32, i32>(&mut store, "alloc")?;
-        let run = instance.get_typed_func::<(i32, i32, i32, i32), ()>(&mut store, "run")?;
 
         // Write input features as little-endian f32 straight into guest memory. On a
         // little-endian host this is a zero-intermediate cast (`bytemuck::cast_slice`
@@ -206,7 +189,7 @@ impl Sandbox {
         }
 
         let out_ptr = alloc.call(&mut store, out_byte_len as i32)?;
-        run.call(&mut store, (in_ptr, out_ptr, ncells_i32, stride_i32))?;
+        run_call(&mut store, &instance, in_ptr, out_ptr)?;
 
         // Read output tokens back — directly into the u32 buffer on little-endian.
         let mut out = vec![0u32; ncells];
@@ -225,6 +208,82 @@ impl Sandbox {
             }
         }
         Ok(out)
+    }
+
+    /// Run a gather Facet that maps a per-cell feature buffer to one `u32` output token
+    /// per cell (for ASCII, a glyph codepoint). See the module docs for the ABI.
+    ///
+    /// `features` must be exactly `ncells * stride` values. All boundary crossings are
+    /// bounds-checked by wasmtime, so a Facet returning a bogus pointer yields an
+    /// `Err`, never a host panic. Zero imports and full metering apply.
+    pub fn run_map(
+        &self,
+        facet: &Facet,
+        limits: Limits,
+        features: &[f32],
+        ncells: usize,
+        stride: usize,
+    ) -> Result<Vec<u32>> {
+        if stride == 0 {
+            return Err(anyhow!("stride must be non-zero"));
+        }
+        let expected = ncells
+            .checked_mul(stride)
+            .ok_or_else(|| anyhow!("ncells * stride overflows"))?;
+        if features.len() != expected {
+            return Err(anyhow!(
+                "features length {} != ncells * stride ({expected})",
+                features.len()
+            ));
+        }
+        let ncells_i32: i32 = ncells.try_into().map_err(|_| anyhow!("too many cells"))?;
+        let stride_i32: i32 = stride.try_into().map_err(|_| anyhow!("stride too large"))?;
+
+        self.run_marshalled(facet, limits, features, ncells, |store, instance, in_ptr, out_ptr| {
+            let run = instance.get_typed_func::<(i32, i32, i32, i32), ()>(&mut *store, "run")?;
+            run.call(&mut *store, (in_ptr, out_ptr, ncells_i32, stride_i32))?;
+            Ok(())
+        })
+    }
+
+    /// Run a **propagation** Facet (decision D5): like [`run_map`], but the guest
+    /// exports `run2d(in_ptr, out_ptr, cols, rows, stride)` and is handed the 2-D grid
+    /// shape, so it can implement feedback methods (e.g. error-diffusion dithering)
+    /// whose traversal needs neighbour positions. Still one output token per cell, and
+    /// the same bounds-checking, zero imports, and metering as `run_map`.
+    pub fn run_map_2d(
+        &self,
+        facet: &Facet,
+        limits: Limits,
+        features: &[f32],
+        cols: usize,
+        rows: usize,
+        stride: usize,
+    ) -> Result<Vec<u32>> {
+        if stride == 0 {
+            return Err(anyhow!("stride must be non-zero"));
+        }
+        let ncells = cols
+            .checked_mul(rows)
+            .ok_or_else(|| anyhow!("cols * rows overflows"))?;
+        let expected = ncells
+            .checked_mul(stride)
+            .ok_or_else(|| anyhow!("cols * rows * stride overflows"))?;
+        if features.len() != expected {
+            return Err(anyhow!(
+                "features length {} != cols * rows * stride ({expected})",
+                features.len()
+            ));
+        }
+        let cols_i32: i32 = cols.try_into().map_err(|_| anyhow!("too many columns"))?;
+        let rows_i32: i32 = rows.try_into().map_err(|_| anyhow!("too many rows"))?;
+        let stride_i32: i32 = stride.try_into().map_err(|_| anyhow!("stride too large"))?;
+
+        self.run_marshalled(facet, limits, features, ncells, |store, instance, in_ptr, out_ptr| {
+            let run = instance.get_typed_func::<(i32, i32, i32, i32, i32), ()>(&mut *store, "run2d")?;
+            run.call(&mut *store, (in_ptr, out_ptr, cols_i32, rows_i32, stride_i32))?;
+            Ok(())
+        })
     }
 }
 
@@ -259,6 +318,35 @@ mod tests {
             local.get 1
             i32.add))
     "#;
+
+    // A propagation Facet exporting `run2d`; writes cols,rows to out[0],out[1] to
+    // prove run_map_2d hands the grid shape across the boundary.
+    const RUN2D_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1 1)
+          (global $bump (mut i32) (i32.const 0))
+          (func (export "alloc") (param $n i32) (result i32)
+            (local $p i32)
+            (local.set $p (global.get $bump))
+            (global.set $bump (i32.add (global.get $bump) (local.get $n)))
+            (local.get $p))
+          (func (export "run2d")
+            (param $in i32) (param $out i32) (param $cols i32) (param $rows i32) (param $stride i32)
+            (i32.store (local.get $out) (local.get $cols))
+            (i32.store (i32.add (local.get $out) (i32.const 4)) (local.get $rows))))
+    "#;
+
+    #[test]
+    fn run_map_2d_passes_grid_shape_to_run2d() {
+        let sandbox = Sandbox::new().unwrap();
+        let facet = sandbox.compile(RUN2D_WAT).unwrap();
+        // 3x2 grid, stride 1 -> 6 feature values; run2d writes cols,rows to out[0],[1].
+        let features = vec![0.0f32; 6];
+        let out = sandbox
+            .run_map_2d(&facet, Limits::default(), &features, 3, 2, 1)
+            .unwrap();
+        assert_eq!(out, vec![3, 2, 0, 0, 0, 0]);
+    }
 
     const INFINITE_WAT: &str = r#"
         (module
