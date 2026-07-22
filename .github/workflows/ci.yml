@@ -80,6 +80,7 @@ jobs:
           node --test
           packages/facet-abi/test/conformance.test.ts
           packages/facet-abi/test/adversarial.test.ts
+          packages/facet-abi/test/conformance-gate.test.ts
           packages/facet-abi/test/timeout.test.ts
           crates/mosaic-wasm/test/pipeline.test.ts
           crates/mosaic-wasm/test/spectral.test.ts

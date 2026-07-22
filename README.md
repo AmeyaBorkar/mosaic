@@ -74,7 +74,7 @@ The full pipeline is implemented and proven end-to-end, **native and browser**:
   (1-bit Floyd–Steinberg error-diffusion — the propagation/feedback class via the 2-D
   `run2d` ABI), plus `spin`/`liar` adversarial fixtures for the sandbox tests.
 
-**Verification:** 112 Rust tests + 24 JS tests, `clippy -D warnings` clean, with
+**Verification:** 112 Rust tests + 29 JS tests, `clippy -D warnings` clean, with
 adversarial sandbox tests, native≡wasm conformance sweeps for **both** engines
 (preview == render), a cross-domain proof that one Facet binary renders images and audio
 identically, a native≡browser proof that a cross-engine composed artifact is byte-identical,

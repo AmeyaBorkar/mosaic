@@ -82,7 +82,17 @@ export function checkMemoryLimits(bytes: BufferSource): void {
   const u8 = ArrayBuffer.isView(bytes)
     ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
     : new Uint8Array(bytes);
-  for (const mem of readMemoryLimits(u8)) {
+  const memories = readMemoryLimits(u8);
+  // The native sandbox disables multi-memory (wasmtime `wasm_multi_memory(false)`), so a
+  // module with more than one linear memory is rejected server-side. Reject it here too, so
+  // the browser never previews a Facet the server would refuse — V8 ships multi-memory and
+  // would otherwise accept it, opening a preview-vs-render divergence.
+  if (memories.length > 1) {
+    throw new FacetAbiError(
+      `Facet must declare at most one linear memory, found ${memories.length}`,
+    );
+  }
+  for (const mem of memories) {
     if (mem.shared) {
       throw new FacetAbiError("Facet memory must not be shared");
     }
