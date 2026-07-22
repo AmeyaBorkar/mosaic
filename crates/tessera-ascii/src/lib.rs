@@ -30,6 +30,12 @@ pub use grid::Grid;
 pub use image::ImageRef;
 pub use render::{DEFAULT_RAMP, Options};
 
+// The untrusted-output → text-grid composition is a domain-agnostic substrate
+// primitive (Mosaic slot 5), so it lives in `mosaic-core` and is shared with every
+// other engine. Re-exported here so `tessera_ascii::compose_codepoints` — used by the
+// wasm bridge, the sandboxed-Facet tests, and the examples — keeps its path.
+pub use mosaic_core::compose::compose_codepoints;
+
 /// Upper bound on grid cells, guarding against pathological allocations from
 /// absurd column counts. Generous: 8M cells is far beyond any real ASCII render.
 pub const MAX_CELLS: usize = 8_000_000;
@@ -125,53 +131,6 @@ pub fn render_dither(image: &ImageRef, cols: u32, cell_aspect: f32) -> Result<St
         &mut out,
     );
     Ok(compose_codepoints(buf.cols, buf.rows, &out))
-}
-
-/// Compose per-cell output codepoints (produced by a Facet) into an ASCII string,
-/// row-major with `\n` between rows.
-///
-/// Untrusted Facet output is never assumed to be safe text. A codepoint is replaced
-/// with `U+FFFD` when it is not a valid Unicode scalar (`char::from_u32` fails) **or**
-/// when it is unsafe to emit — a C0/C1 control (including `ESC`, which would inject
-/// terminal escape sequences, and `LF`/`CR`, which would break the row/column grid)
-/// or a bidi/format override used for visual spoofing. Only printable glyphs cross
-/// the boundary; the row separators are the sole `\n` this function emits.
-pub fn compose_codepoints(cols: u32, rows: u32, codepoints: &[u32]) -> String {
-    // Bounded capacity hint: callers must pass sane dimensions (the pipeline caps
-    // them at `MAX_CELLS`); never pre-allocate unboundedly from untrusted sizes.
-    let hint = (cols as usize)
-        .saturating_mul(rows as usize)
-        .saturating_add(rows as usize)
-        .min(1 << 16);
-    let mut out = String::with_capacity(hint);
-    for row in 0..rows {
-        for col in 0..cols {
-            let idx = (row as usize * cols as usize) + col as usize;
-            let ch = codepoints
-                .get(idx)
-                .and_then(|&c| char::from_u32(c))
-                .filter(|c| !is_unsafe_glyph(*c))
-                .unwrap_or('\u{FFFD}');
-            out.push(ch);
-        }
-        if row + 1 < rows {
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// Whether a scalar value is unsafe to emit from untrusted Facet output and must be
-/// masked to `U+FFFD`: any C0/C1 control or `DEL` (`char::is_control`, covering `ESC`,
-/// `LF`, `CR`, …) and the bidirectional/format overrides used for visual spoofing.
-/// Rust's std cannot query the `Cf` general category without a Unicode table, so the
-/// well-known spoofing overrides are listed explicitly.
-fn is_unsafe_glyph(c: char) -> bool {
-    c.is_control()
-        || matches!(c,
-            '\u{200E}' | '\u{200F}' | '\u{061C}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2066}'..='\u{2069}')
 }
 
 /// Errors returned by the engine. Malformed input is always a value, never a panic.
@@ -928,27 +887,6 @@ mod tests {
         };
         let out = render_ascii(&ImageRef::new(3, 3, &small).unwrap(), &opts).unwrap();
         assert!(out.lines().all(|l| l.chars().count() == 100));
-    }
-
-    #[test]
-    fn compose_codepoints_validates_untrusted_output() {
-        // 'A', a surrogate (invalid), out-of-range (invalid), 'B' -> replacements.
-        let cps = vec![0x41u32, 0xD800, 0x11_0000, 0x42];
-        assert_eq!(compose_codepoints(2, 2, &cps), "A\u{FFFD}\n\u{FFFD}B");
-        // Too few codepoints: missing cells become the replacement char, no panic.
-        assert_eq!(compose_codepoints(2, 1, &[0x41]), "A\u{FFFD}");
-    }
-
-    #[test]
-    fn compose_codepoints_masks_control_and_bidi() {
-        // ESC, LF, DEL, and a RLO bidi override are all unsafe -> U+FFFD; 'A' survives.
-        // This blocks terminal-escape injection and newline-driven grid corruption
-        // from untrusted Facet output (validated once, for native and browser alike).
-        let cps = vec![0x1Bu32, 0x0A, 0x7F, 0x202E, 0x41];
-        assert_eq!(
-            compose_codepoints(5, 1, &cps),
-            "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}A"
-        );
     }
 
     // --- L2 structural (sub-cell patch) ---

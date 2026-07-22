@@ -159,10 +159,88 @@ pub mod output {}
 
 /// Slot 5 — composition: how output primitives are reassembled into a whole.
 ///
-/// How per-unit outputs recombine (a text grid, a raster, a plot). Owned by
-/// the Tessera, which receives the grid of Facet outputs and produces the
-/// final artifact.
-pub mod compose {}
+/// How per-unit outputs recombine (a text grid, a raster, a plot). The text-grid
+/// composition below is **domain-agnostic**: it turns any engine's per-unit `u32`
+/// output tokens into a safe character grid. Every Tessera whose output primitive is
+/// a Unicode glyph (ASCII, spectrogram, …) shares this one implementation, so the
+/// untrusted-text boundary is defined once, in the substrate, and enforced
+/// identically across domains rather than re-implemented per engine.
+pub mod compose {
+    /// Compose per-unit output codepoints (produced by a Facet) into a string,
+    /// row-major with `\n` between rows.
+    ///
+    /// Untrusted Facet output is never assumed to be safe text. A codepoint is
+    /// replaced with `U+FFFD` when it is not a valid Unicode scalar
+    /// (`char::from_u32` fails) **or** when it is unsafe to emit — a C0/C1 control
+    /// (including `ESC`, which would inject terminal escape sequences, and `LF`/`CR`,
+    /// which would break the row/column grid) or a bidi/format override used for
+    /// visual spoofing. Only printable glyphs cross the boundary; the row separators
+    /// are the sole `\n` this function emits.
+    ///
+    /// Callers pass grid dimensions already capped by their engine's cell budget;
+    /// this function never pre-allocates unboundedly from untrusted sizes.
+    pub fn compose_codepoints(cols: u32, rows: u32, codepoints: &[u32]) -> String {
+        let hint = (cols as usize)
+            .saturating_mul(rows as usize)
+            .saturating_add(rows as usize)
+            .min(1 << 16);
+        let mut out = String::with_capacity(hint);
+        for row in 0..rows {
+            for col in 0..cols {
+                let idx = (row as usize * cols as usize) + col as usize;
+                let ch = codepoints
+                    .get(idx)
+                    .and_then(|&c| char::from_u32(c))
+                    .filter(|c| !is_unsafe_glyph(*c))
+                    .unwrap_or('\u{FFFD}');
+                out.push(ch);
+            }
+            if row + 1 < rows {
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    /// Whether a scalar value is unsafe to emit from untrusted Facet output and must
+    /// be masked to `U+FFFD`: any C0/C1 control or `DEL` (`char::is_control`, covering
+    /// `ESC`, `LF`, `CR`, …) and the bidirectional/format overrides used for visual
+    /// spoofing. Rust's std cannot query the `Cf` general category without a Unicode
+    /// table, so the well-known spoofing overrides are listed explicitly.
+    fn is_unsafe_glyph(c: char) -> bool {
+        c.is_control()
+            || matches!(c,
+                '\u{200E}' | '\u{200F}' | '\u{061C}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}')
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::compose_codepoints;
+
+        #[test]
+        fn validates_untrusted_output() {
+            // 'A', a surrogate (invalid), out-of-range (invalid), 'B' -> replacements.
+            let cps = vec![0x41u32, 0xD800, 0x11_0000, 0x42];
+            assert_eq!(compose_codepoints(2, 2, &cps), "A\u{FFFD}\n\u{FFFD}B");
+            // Too few codepoints: missing cells become the replacement char, no panic.
+            assert_eq!(compose_codepoints(2, 1, &[0x41]), "A\u{FFFD}");
+        }
+
+        #[test]
+        fn masks_control_and_bidi() {
+            // ESC, LF, DEL, and a RLO bidi override are all unsafe -> U+FFFD; 'A'
+            // survives. This blocks terminal-escape injection and newline-driven grid
+            // corruption from untrusted Facet output, once, for every engine.
+            let cps = vec![0x1Bu32, 0x0A, 0x7F, 0x202E, 0x41];
+            assert_eq!(
+                compose_codepoints(5, 1, &cps),
+                "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}A"
+            );
+        }
+    }
+}
 
 /// Opt-in sequential propagation (D5 / O1) — for the feedback class.
 ///
