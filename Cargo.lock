@@ -730,6 +730,7 @@ version = "0.0.0"
 dependencies = [
  "js-sys",
  "tessera-ascii",
+ "tessera-spectral",
  "wasm-bindgen",
 ]
 

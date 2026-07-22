@@ -1,11 +1,11 @@
 //! wasm-bindgen browser bindings for the Mosaic engine.
 //!
-//! This crate compiles the **same** `tessera-ascii` engine to `wasm32` so the
-//! browser runs identical feature-extraction and composition to the native/server
-//! path — one implementation, no drift (decision D2). It deliberately does **not**
-//! depend on `mosaic-runtime` (wasmtime is native-only); untrusted Facets execute
-//! in the browser via `@mosaic/facet-abi` on the browser's own WebAssembly engine
-//! (decision D9).
+//! This crate compiles the **same** engines (`tessera-ascii` and `tessera-spectral`)
+//! to `wasm32` so the browser runs identical feature-extraction and composition to the
+//! native/server path — one implementation, no drift (decision D2). It deliberately
+//! does **not** depend on `mosaic-runtime` (wasmtime is native-only); untrusted Facets
+//! execute in the browser via `@mosaic/facet-abi` on the browser's own WebAssembly
+//! engine (decision D9).
 //!
 //! The browser render pipeline is three steps:
 //! 1. [`extract_features`] — image → per-cell feature buffer (here, wasm).
@@ -14,6 +14,7 @@
 
 use tessera_ascii::feature;
 use tessera_ascii::{Grid, ImageRef, MAX_CELLS};
+use tessera_spectral::{SignalRef, SpectroGrid, feature as spectral_feature};
 use wasm_bindgen::prelude::*;
 
 /// Per-cell feature buffer produced by [`extract_features`]: `cols * rows` cells,
@@ -134,6 +135,37 @@ pub fn extract_structural_features(
         cell_aspect,
         feature::extract_structural,
     )
+}
+
+/// Extract the **spectral** vocabulary (per-cell band energy, stride 1) from a block of
+/// mono PCM `samples` — the second engine's features. `samples` is a `Float32Array` of
+/// audio; the grid is `bands` log-spaced frequency rows measured over a `win`-sample
+/// window hopped by `hop`, covering `[fmin, fmax]` Hz. The buffer is fed to a scalar
+/// gather Facet (e.g. `facet_ramp`) exactly like the image features — the same
+/// domain-agnostic Facet, now on the browser path for audio too.
+///
+/// Throws on an empty signal, a zero sample rate, an out-of-range band spec, or a grid
+/// exceeding the engine's cell budget.
+#[wasm_bindgen]
+pub fn extract_spectral_features(
+    samples: &[f32],
+    sample_rate: u32,
+    bands: u32,
+    win: u32,
+    hop: u32,
+    fmin: f32,
+    fmax: f32,
+) -> Result<FeatureBuffer, JsError> {
+    let signal = SignalRef::new(samples, sample_rate).map_err(|e| JsError::new(&e.to_string()))?;
+    let grid = SpectroGrid::new(bands, win, hop, fmin, fmax);
+    let buf =
+        spectral_feature::extract(&signal, &grid).map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(FeatureBuffer {
+        cols: buf.cols,
+        rows: buf.rows,
+        stride: buf.stride,
+        data: buf.data,
+    })
 }
 
 /// Compose per-cell output tokens (`u32` codepoints from a Facet) into ASCII text,
