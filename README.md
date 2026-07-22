@@ -59,20 +59,24 @@ The full pipeline is implemented and proven end-to-end, **native and browser**:
   layers renders from any engine(s) into one artifact — overlay, tiling, masking, and
   ordered-dither `StippleOver` blending of discrete glyphs — proven native and in the
   browser on a genuine cross-engine artifact (image ASCII stacked with an audio spectrogram).
+- **Declarative Compositions (O4.1)** — `mosaic-compose`: a JSON-serializable layer stack
+  (the shareable artifact the registry will store and the shell will render), rendered
+  through a host `LayerResolver`; proven driving the real engines to one artifact and stable
+  across a serialize → parse → render round-trip.
 - **`packages/facet-abi`** — the browser-side Facet host: mirrors the native ABI
   and sandboxes untrusted Facets in a timeout Worker.
 - **Facets** — `ramp` (density + edges), `structural` (L2 glyph-match), and `dither`
   (1-bit Floyd–Steinberg error-diffusion — the propagation/feedback class via the 2-D
   `run2d` ABI), plus `spin`/`liar` adversarial fixtures for the sandbox tests.
 
-**Verification:** 85 Rust tests + 24 JS tests, `clippy -D warnings` clean, with
+**Verification:** 93 Rust tests + 24 JS tests, `clippy -D warnings` clean, with
 adversarial sandbox tests, native≡wasm conformance sweeps for **both** engines
 (preview == render), a cross-domain proof that one Facet binary renders images and audio
 identically, and a native≡browser proof that a cross-engine composed artifact is
 byte-identical.
 
-Not yet built (see the architecture doc): the Facet DSL (O3), a declarative shareable
-Composition (O4.1), the registry + conformance gate, and the web UI shell.
+Not yet built (see the architecture doc): the Facet DSL (O3), the registry + conformance
+gate, an authoritative server render endpoint, and the web UI shell.
 
 ## Repository layout
 
@@ -84,7 +88,8 @@ crates/
   mosaic-runtime/  # WASM host: pure, fuel-metered, memory-bounded Facet sandbox
   tessera-ascii/   # first engine: image → ASCII (L0/L1/L2 + dithering)
   tessera-spectral/# second engine: audio → spectrogram art (contract universality, O5)
-  mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose
+  mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose + Canvas
+  mosaic-compose/  # declarative, JSON-serializable Compositions (O4.1) rendered via a resolver
 facets/            # guest Facets (Rust → wasm): ramp, structural, dither, spin, liar
 packages/
   facet-abi/       # browser Facet host (TypeScript): ABI mirror + Worker sandbox

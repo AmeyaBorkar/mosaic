@@ -269,18 +269,30 @@ transcendentals), so the browser `Canvas` binding reproduces native composition
 byte-for-byte (`composite.test.ts`) — proven on a genuine cross-engine artifact (an image
 ASCII render stacked with an audio spectrogram) plus energy-driven `StippleOver`.
 
-This primitive is the foundation a declarative, registry-shareable Composition (a
-serialized layer stack the platform renders) will wrap — the natural O4 follow-on.
+This primitive is the foundation the declarative, shareable Composition (D13) wraps.
+
+### D13 — Declarative Composition: a shareable, serialized layer stack *(settled — O4.1)*
+`mosaic-compose` is the declarative layer above the D12 primitive: a `Composition` is pure,
+JSON-serializable data — a canvas plus an ordered stack of layers, each naming the engine +
+Facet + input that produces it, its placement, blend, and coverage mode. It is a
+first-class shareable artifact, exactly like a Facet: the registry stores it, the web shell
+renders it.
+
+The schema carries everything *except how to run an engine* — that is the host's job.
+`render()` takes a `LayerResolver` (the seam the registry/server fills): given a layer's
+`LayerSource`, the resolver produces its token grid (e.g. by running a Facet in the
+sandbox), and `render` composites the stack through the O4 `Canvas`. So the crate stays
+engine-agnostic (it depends only on the substrate), and rendering inherits every O4
+guarantee — no untrusted code in the compositor, and the final text passes the
+untrusted-glyph boundary. Proven end-to-end: a JSON composition drives the real image and
+audio engines to one artifact, byte-stable across a serialize → parse → render round-trip.
 
 ## Open decisions (from the vision — deliberately not yet frozen)
 
-- *O1 (neighbor visibility), O2 (ASCII feature vocabulary), O4 (cross-engine
-  composition), and O5 (contract universality) are now settled — see D5, D6, D11, D12.*
+- *O1 (neighbor visibility), O2 (ASCII vocabulary), O4 (composition), O4.1 (declarative
+  composition), and O5 (contract universality) are settled — see D5, D6, D11, D12, D13.*
 - **O3 — Facet DSL syntax & semantics.** Deferred by D3 until the contract holds. Two
-  engines now share it unchanged (D11), so a DSL is better-informed — but still deferred.
-- **O4.1 — Declarative, shareable Composition.** D12 built the compositor primitive; a
-  serialized layer stack the registry can store and the platform renders is the follow-on
-  (pairs with the registry).
+  engines now share it unchanged (D11), so a DSL is better-informed — the last open O.
 
 ## Repository layout
 
@@ -292,7 +304,8 @@ crates/
   mosaic-runtime/  # WASM host: pure, fuel-metered, memory-bounded Facet sandbox
   tessera-ascii/   # first engine: images (L0/L1 density+edges, L2 structural glyph-match)
   tessera-spectral/# second engine: audio PCM -> spectrogram art (proves contract universality, O5)
-  mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose (built)
+  mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose + Canvas (built)
+  mosaic-compose/  # declarative, JSON-serializable Compositions (O4.1) rendered via a resolver
 apps/
   web/             # Next.js shell: editor, controls, live preview, registry   (planned)
 facets/ramp/       # bootstrap Facet (Rust -> wasm): density ramp + edge glyphs
