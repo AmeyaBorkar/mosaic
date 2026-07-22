@@ -17,6 +17,7 @@ import {
   FacetAbiError,
   MAX_WASM_LEN,
 } from "../src/index.ts";
+import { checkMemoryLimits } from "../src/host.ts";
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const rampWasm = readFileSync(here("./fixtures/facet_ramp.wasm"));
@@ -87,5 +88,33 @@ test("rejects a Facet whose alloc returns a wild pointer (bounds-checked)", asyn
     (e) =>
       e instanceof FacetAbiError &&
       /invalid pointer|out of bounds/.test(e.message),
+  );
+});
+
+// Minimal memory-section-only modules ([id 5, size, count, flags, min, (max)]);
+// flags bit0 = has-max, bit1 = shared. checkMemoryLimits parses bytes directly.
+const MEM_UNBOUNDED = new Uint8Array([...HEADER, 0x05, 0x03, 0x01, 0x00, 0x01]);
+const MEM_BOUNDED_OK = new Uint8Array([...HEADER, 0x05, 0x04, 0x01, 0x01, 0x01, 0x01]);
+const MEM_OVERSIZED = new Uint8Array([...HEADER, 0x05, 0x05, 0x01, 0x01, 0x01, 0x81, 0x02]); // max 257 pages
+const MEM_SHARED = new Uint8Array([...HEADER, 0x05, 0x04, 0x01, 0x03, 0x01, 0x01]);
+
+test("rejects a Facet whose linear memory is unbounded, oversized, or shared (H1)", () => {
+  assert.throws(() => checkMemoryLimits(MEM_UNBOUNDED), /bounded maximum/);
+  assert.throws(() => checkMemoryLimits(MEM_OVERSIZED), /exceeds/);
+  assert.throws(() => checkMemoryLimits(MEM_SHARED), /shared/);
+  assert.doesNotThrow(() => checkMemoryLimits(MEM_BOUNDED_OK));
+});
+
+test("the built Facet fixtures declare a bounded memory maximum", () => {
+  // Confirms the --max-memory build flag took effect (else the memory bomb is uncapped).
+  assert.doesNotThrow(() => checkMemoryLimits(rampWasm));
+  assert.doesNotThrow(() => checkMemoryLimits(liarWasm));
+});
+
+test("rejects stride/ncells above the i32 range (L2)", async () => {
+  const module = await compileFacet(rampWasm);
+  assert.throws(
+    () => runFacetMap(module, new Float32Array(0), 0, 2 ** 32),
+    /i32 range/,
   );
 });

@@ -18,6 +18,85 @@ import {
 /** Whether this platform lays out multi-byte integers little-endian. */
 const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
 
+/** Maximum linear-memory pages an untrusted Facet may declare (16 MiB / 64 KiB) —
+ *  the browser analogue of the native StoreLimits memory cap. */
+const MAX_MEMORY_PAGES = 256;
+
+/** Read an unsigned LEB128 integer at `off`; returns `[value, nextOffset]`. */
+function readUleb(bytes: Uint8Array, off: number): [number, number] {
+  let result = 0;
+  let shift = 0;
+  let pos = off;
+  for (let i = 0; i < 5; i++) {
+    const byte = bytes[pos++] ?? 0;
+    result |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) break;
+    shift += 7;
+  }
+  return [result >>> 0, pos];
+}
+
+/** Declared limits of each linear memory *defined* in the module (imported memory,
+ *  if any, is already rejected as an import). Parsed from the module bytes because
+ *  `WebAssembly.Module` reflection exposes export kinds but not memory limits. */
+function readMemoryLimits(
+  bytes: Uint8Array,
+): Array<{ min: number; max: number | undefined; shared: boolean }> {
+  const out: Array<{ min: number; max: number | undefined; shared: boolean }> = [];
+  let off = 8; // skip the 8-byte magic + version (already validated by compile)
+  while (off < bytes.length) {
+    const id = bytes[off++] ?? 0;
+    const [size, afterSize] = readUleb(bytes, off);
+    off = afterSize;
+    const sectionEnd = off + size;
+    if (id === 5) {
+      let p = off;
+      const [count, afterCount] = readUleb(bytes, p);
+      p = afterCount;
+      for (let i = 0; i < count; i++) {
+        const flags = bytes[p++] ?? 0;
+        const [min, afterMin] = readUleb(bytes, p);
+        p = afterMin;
+        let max: number | undefined;
+        if ((flags & 0x01) !== 0) {
+          const [m, afterMax] = readUleb(bytes, p);
+          p = afterMax;
+          max = m;
+        }
+        out.push({ min, max, shared: (flags & 0x02) !== 0 });
+      }
+    }
+    off = sectionEnd;
+  }
+  return out;
+}
+
+/**
+ * Reject a Facet whose defined linear memory is unbounded, shared, or declares a
+ * maximum above the cap. The browser enforces a declared maximum on `memory.grow`,
+ * so bounding it here contains a memory-bomb Facet the way the native StoreLimits
+ * cap does — growth past the cap traps rather than committing gigabytes into the
+ * page. Called on the (already-compiled, valid) module bytes.
+ */
+export function checkMemoryLimits(bytes: BufferSource): void {
+  const u8 = ArrayBuffer.isView(bytes)
+    ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    : new Uint8Array(bytes);
+  for (const mem of readMemoryLimits(u8)) {
+    if (mem.shared) {
+      throw new FacetAbiError("Facet memory must not be shared");
+    }
+    if (mem.max === undefined) {
+      throw new FacetAbiError("Facet memory must declare a bounded maximum");
+    }
+    if (mem.max > MAX_MEMORY_PAGES) {
+      throw new FacetAbiError(
+        `Facet memory maximum of ${mem.max} pages exceeds the ${MAX_MEMORY_PAGES}-page (16 MiB) cap`,
+      );
+    }
+  }
+}
+
 /** Required exports and their kinds, matching what `run_map` looks up. */
 const REQUIRED_EXPORTS: ReadonlyArray<readonly [string, WebAssembly.ImportExportKind]> = [
   ["memory", "memory"],
@@ -64,6 +143,7 @@ export async function compileFacet(bytes: BufferSource): Promise<WebAssembly.Mod
   } catch (e) {
     throw new FacetAbiError(`Facet failed to compile: ${messageOf(e)}`);
   }
+  checkMemoryLimits(bytes);
   validateFacetModule(module);
   return module;
 }
@@ -93,8 +173,14 @@ export function runFacetMap(
   if (!Number.isInteger(stride) || stride <= 0) {
     throw new FacetAbiError("stride must be a positive integer");
   }
+  if (stride > 0x7fff_ffff) {
+    throw new FacetAbiError("stride exceeds the i32 range");
+  }
   if (!Number.isInteger(ncells) || ncells < 0) {
     throw new FacetAbiError("ncells must be a non-negative integer");
+  }
+  if (ncells > 0x7fff_ffff) {
+    throw new FacetAbiError("ncells exceeds the i32 range");
   }
   const expected = ncells * stride;
   if (features.length !== expected) {
@@ -123,6 +209,14 @@ export function runFacetMap(
     typeof run !== "function"
   ) {
     throw new FacetAbiError("Facet instance is missing required exports");
+  }
+  // Mirror the native get_typed_func signature check: alloc(i32)->i32 has arity 1,
+  // run(i32,i32,i32,i32)->() has arity 4. A wrong-signature export is rejected here
+  // instead of silently producing garbage (extra args dropped / missing zero-filled).
+  if (alloc.length !== 1 || run.length !== 4) {
+    throw new FacetAbiError(
+      `Facet export arity is wrong: alloc/${alloc.length} run/${run.length} (expected alloc/1 run/4)`,
+    );
   }
 
   const inPtr = callGuest("alloc", () => alloc(inByteLen));
@@ -166,16 +260,15 @@ function readTokensLE(
 ): Uint32Array {
   const byteLen = ncells * TOKEN_BYTES;
   ensureRange(memory, ptr, byteLen);
-  const out = new Uint32Array(ncells);
   if (LITTLE_ENDIAN) {
-    // slice() copies bytes into a fresh, aligned buffer (no alignment constraint
-    // on ptr, and detach-safe if the guest later grows memory).
-    out.set(new Uint32Array(memory.buffer.slice(ptr, ptr + byteLen)));
-  } else {
-    const view = new DataView(memory.buffer, ptr, byteLen);
-    for (let i = 0; i < ncells; i++) {
-      out[i] = view.getUint32(i * TOKEN_BYTES, true);
-    }
+    // slice() copies into a fresh, aligned, detach-safe buffer — a single allocation
+    // and a single copy (no separately zero-filled destination).
+    return new Uint32Array(memory.buffer.slice(ptr, ptr + byteLen));
+  }
+  const out = new Uint32Array(ncells);
+  const view = new DataView(memory.buffer, ptr, byteLen);
+  for (let i = 0; i < ncells; i++) {
+    out[i] = view.getUint32(i * TOKEN_BYTES, true);
   }
   return out;
 }
