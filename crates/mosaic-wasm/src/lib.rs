@@ -71,7 +71,7 @@ fn extract_with(
     height: u32,
     cols: u32,
     cell_aspect: f32,
-    extractor: fn(&ImageRef, &Grid) -> feature::FeatureBuffer,
+    extractor: fn(&ImageRef, &Grid) -> Result<feature::FeatureBuffer, tessera_ascii::Error>,
 ) -> Result<FeatureBuffer, JsError> {
     if cols == 0 {
         return Err(JsError::new("cols must be greater than zero"));
@@ -86,7 +86,7 @@ fn extract_with(
             "grid has {ncells} cells, exceeding the maximum of {MAX_CELLS}"
         )));
     }
-    let buf = extractor(&image, &grid);
+    let buf = extractor(&image, &grid).map_err(|e| JsError::new(&e.to_string()))?;
     Ok(FeatureBuffer {
         cols: buf.cols,
         rows: buf.rows,

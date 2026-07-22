@@ -34,6 +34,13 @@ pub use render::{DEFAULT_RAMP, Options};
 /// absurd column counts. Generous: 8M cells is far beyond any real ASCII render.
 pub const MAX_CELLS: usize = 8_000_000;
 
+/// Upper bound on the `f32` feature buffer produced for one render, in **bytes**.
+/// Unlike [`MAX_CELLS`] (a cell *count*), this is byte-aware, so it holds across both
+/// the stride-3 (L0+L1) and stride-64 (L2) vocabularies — an 8M-cell L2 grid would
+/// otherwise allocate ~2 GB. Sized so the buffer plus a Facet's output fits inside
+/// `mosaic-runtime`'s 16 MiB per-execution memory cap.
+pub const MAX_FEATURE_BYTES: usize = 8 * 1024 * 1024;
+
 /// Render an image to ASCII text using the density + edge Facet.
 ///
 /// Returns an [`Error`] on invalid options rather than panicking. The input
@@ -55,7 +62,7 @@ pub fn render_ascii(image: &ImageRef, opts: &Options) -> Result<String, Error> {
             max: MAX_CELLS,
         });
     }
-    let buf = feature::extract(image, &grid);
+    let buf = feature::extract(image, &grid)?;
     render::compose(&buf, opts)
 }
 
@@ -78,7 +85,7 @@ pub fn render_structural(image: &ImageRef, cols: u32, cell_aspect: f32) -> Resul
             max: MAX_CELLS,
         });
     }
-    let buf = feature::extract_structural(image, &grid);
+    let buf = feature::extract_structural(image, &grid)?;
     let stride = buf.stride as usize;
     let mut codepoints = Vec::with_capacity(cells);
     for i in 0..cells {
@@ -152,6 +159,8 @@ pub mod error {
         EmptyRamp,
         /// The grid exceeded [`crate::MAX_CELLS`].
         TooManyCells { cells: usize, max: usize },
+        /// The feature buffer would exceed [`crate::MAX_FEATURE_BYTES`].
+        FeatureBufferTooLarge { bytes: usize, max: usize },
     }
 
     impl core::fmt::Display for Error {
@@ -174,6 +183,10 @@ pub mod error {
                 Error::TooManyCells { cells, max } => {
                     write!(f, "grid has {cells} cells, exceeding the maximum of {max}")
                 }
+                Error::FeatureBufferTooLarge { bytes, max } => write!(
+                    f,
+                    "feature buffer is {bytes} bytes, exceeding the maximum of {max}"
+                ),
             }
         }
     }
@@ -301,10 +314,35 @@ pub mod grid {
 
 /// Slot 3 (Feature vocabulary) — the ASCII vocabulary and its extraction.
 pub mod feature {
+    use super::error::Error;
     use super::grid::Grid;
     use super::image::ImageRef;
-    use glyph_atlas::{PATCH_COLS, PATCH_ROWS};
+    use glyph_atlas::{PATCH_COLS, PATCH_ROWS, PATCH_SLOTS};
     use mosaic_core::feature::{FeatureField, FeatureSchema, FeatureType, Gather};
+
+    /// The L0+L1 stride (luminance + gradient magnitude/orientation) as a compile-time
+    /// constant, equal to `vocabulary().total_slots()`; used on the hot path so a
+    /// schema `Vec` + `String` keys are not rebuilt every render just to sum a
+    /// constant (asserted equal in `vocabulary_matches_core_schema`).
+    const STRIDE_L0_L1: u32 = 3;
+
+    /// Reject a feature buffer whose byte size overflows or exceeds
+    /// [`crate::MAX_FEATURE_BYTES`], *before* it is allocated — so a pathological grid
+    /// (e.g. a 1×1 image with a huge `cols`) can never drive a multi-GB or aborting
+    /// allocation, from any entry point including the `pub` extractors.
+    fn check_feature_budget(ncells: usize, stride: u32) -> Result<(), Error> {
+        let bytes = ncells
+            .checked_mul(stride as usize)
+            .and_then(|slots| slots.checked_mul(4))
+            .ok_or(Error::DimensionOverflow)?;
+        if bytes > crate::MAX_FEATURE_BYTES {
+            return Err(Error::FeatureBufferTooLarge {
+                bytes,
+                max: crate::MAX_FEATURE_BYTES,
+            });
+        }
+        Ok(())
+    }
 
     /// The declared feature vocabulary:
     /// - `luminance` — L0, self-only scalar (slot 0).
@@ -354,11 +392,12 @@ pub mod feature {
     /// Pass 1 computes each cell's mean luminance (L0). Pass 2 computes the Sobel
     /// gradient of that luminance grid — each cell gathering its 8 neighbors with
     /// edge-clamping (radius-1 gather, D5/O1) — storing magnitude and orientation.
-    pub fn extract(image: &ImageRef, grid: &Grid) -> FeatureBuffer {
-        let stride = vocabulary().total_slots();
+    pub fn extract(image: &ImageRef, grid: &Grid) -> Result<FeatureBuffer, Error> {
+        let stride = STRIDE_L0_L1;
         let cols = grid.cols();
         let rows = grid.rows();
         let ncells = cols as usize * rows as usize;
+        check_feature_budget(ncells, stride)?;
 
         // Pass 1 — mean luminance per cell.
         let mut luminance = vec![0.0f32; ncells];
@@ -404,12 +443,12 @@ pub mod feature {
             }
         }
 
-        FeatureBuffer {
+        Ok(FeatureBuffer {
             cols,
             rows,
             stride,
             data,
-        }
+        })
     }
 
     /// The declared **L2 structural** vocabulary: a single self-only
@@ -434,11 +473,12 @@ pub mod feature {
     /// (row-major), the input a Facet shape-matches against the glyph atlas. Sub
     /// blocks smaller than a pixel sample the nearest pixel, so tiny cells still
     /// yield a defined patch (no panic, no division by zero).
-    pub fn extract_structural(image: &ImageRef, grid: &Grid) -> FeatureBuffer {
-        let stride = vocabulary_structural().total_slots();
+    pub fn extract_structural(image: &ImageRef, grid: &Grid) -> Result<FeatureBuffer, Error> {
+        let stride = PATCH_SLOTS as u32;
         let cols = grid.cols();
         let rows = grid.rows();
         let ncells = cols as usize * rows as usize;
+        check_feature_budget(ncells, stride)?;
         let mut data = vec![0.0f32; ncells * stride as usize];
 
         for row in 0..rows {
@@ -476,12 +516,12 @@ pub mod feature {
             }
         }
 
-        FeatureBuffer {
+        Ok(FeatureBuffer {
             cols,
             rows,
             stride,
             data,
-        }
+        })
     }
 }
 
@@ -924,5 +964,23 @@ mod tests {
         let first = out.chars().find(|c| *c != '\n').unwrap();
         assert!(out.chars().filter(|c| *c != '\n').all(|c| c == first));
         assert_eq!(render_structural(&img, 0, 2.0), Err(Error::ZeroColumns));
+    }
+
+    #[test]
+    fn extract_rejects_oversized_grid_instead_of_panicking() {
+        // A 1x1 image with an enormous cols and a tiny cell aspect yields a grid of
+        // ~10^12 cells: the byte budget must reject both extractors with a clean
+        // Error, never a capacity-overflow panic (the crate's no-panic contract).
+        let one = solid(1, 1, (128, 128, 128));
+        let img = ImageRef::new(1, 1, &one).unwrap();
+        let grid = Grid::new(1, 1, 100_000, 0.01);
+        assert!(matches!(
+            feature::extract(&img, &grid),
+            Err(Error::FeatureBufferTooLarge { .. })
+        ));
+        assert!(matches!(
+            feature::extract_structural(&img, &grid),
+            Err(Error::FeatureBufferTooLarge { .. })
+        ));
     }
 }

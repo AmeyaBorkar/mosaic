@@ -62,7 +62,7 @@ fn main() {
         let structural_text =
             render_structural(&img, opts.cols, opts.cell_aspect).expect("render structural");
         let grid = Grid::new(case.w, case.h, opts.cols, opts.cell_aspect);
-        let feats = feature::extract(&img, &grid);
+        let feats = feature::extract(&img, &grid).expect("extract features");
 
         json.push_str("    {\n");
         json.push_str(&format!("      \"name\": {:?},\n", case.name));

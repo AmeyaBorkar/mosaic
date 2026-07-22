@@ -49,7 +49,7 @@ fn assert_sandboxed_matches_native(w: u32, h: u32, data: &[u8]) {
     let native = render_ascii(&img, &opts).unwrap();
 
     let grid = Grid::new(w, h, opts.cols, opts.cell_aspect);
-    let feats = feature::extract(&img, &grid);
+    let feats = feature::extract(&img, &grid).unwrap();
     let ncells = (feats.cols * feats.rows) as usize;
 
     let sandbox = Sandbox::new().unwrap();
@@ -116,7 +116,7 @@ fn sandboxed_matches_native_over_random_images() {
         let native = render_ascii(&img, &opts).unwrap();
 
         let grid = Grid::new(w, h, opts.cols, opts.cell_aspect);
-        let feats = feature::extract(&img, &grid);
+        let feats = feature::extract(&img, &grid).unwrap();
         let ncells = (feats.cols * feats.rows) as usize;
         let codepoints = sandbox
             .run_map(

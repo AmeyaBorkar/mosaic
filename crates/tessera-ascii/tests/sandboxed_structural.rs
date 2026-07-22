@@ -40,7 +40,7 @@ fn assert_structural_matches_native(
     let native = render_structural(&img, cols, CELL_ASPECT).unwrap();
 
     let grid = Grid::new(w, h, cols, CELL_ASPECT);
-    let feats = feature::extract_structural(&img, &grid);
+    let feats = feature::extract_structural(&img, &grid).unwrap();
     let ncells = (feats.cols * feats.rows) as usize;
     let cps = sandbox
         .run_map(

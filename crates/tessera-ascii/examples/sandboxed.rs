@@ -30,7 +30,7 @@ fn main() {
 
     // 1) Engine (Tessera) extracts the feature buffer.
     let grid = Grid::new(w, h, 60, 2.0);
-    let feats = feature::extract(&img, &grid);
+    let feats = feature::extract(&img, &grid).unwrap();
     let ncells = (feats.cols * feats.rows) as usize;
 
     // 2) Platform runs the untrusted Facet in the sandbox over that buffer.
