@@ -233,6 +233,79 @@ export function runFacetMap(
   return readTokensLE(memory, outPtr, ncells);
 }
 
+/**
+ * Run a **propagation** Facet: like {@link runFacetMap}, but the guest exports
+ * `run2d(inPtr, outPtr, cols, rows, stride)` and receives the 2-D grid shape, for
+ * feedback methods (e.g. error-diffusion dithering) whose traversal needs neighbour
+ * positions. Mirrors `mosaic-runtime::Sandbox::run_map_2d`.
+ */
+export function runFacetMap2d(
+  module: WebAssembly.Module,
+  features: Float32Array,
+  cols: number,
+  rows: number,
+  stride: number,
+): Uint32Array {
+  if (!Number.isInteger(stride) || stride <= 0) {
+    throw new FacetAbiError("stride must be a positive integer");
+  }
+  if (stride > 0x7fff_ffff) {
+    throw new FacetAbiError("stride exceeds the i32 range");
+  }
+  if (!Number.isInteger(cols) || cols < 0 || cols > 0x7fff_ffff) {
+    throw new FacetAbiError("cols must be a non-negative i32");
+  }
+  if (!Number.isInteger(rows) || rows < 0 || rows > 0x7fff_ffff) {
+    throw new FacetAbiError("rows must be a non-negative i32");
+  }
+  const ncells = cols * rows;
+  if (ncells > 0x7fff_ffff) {
+    throw new FacetAbiError("cols * rows exceeds the i32 range");
+  }
+  const expected = ncells * stride;
+  if (features.length !== expected) {
+    throw new FacetAbiError(
+      `features length ${features.length} != cols * rows * stride (${expected})`,
+    );
+  }
+  const inByteLen = checkedWasmByteLen(features.length, FEATURE_BYTES);
+  const outByteLen = checkedWasmByteLen(ncells, TOKEN_BYTES);
+
+  let instance: WebAssembly.Instance;
+  try {
+    instance = new WebAssembly.Instance(module, {});
+  } catch (e) {
+    throw new FacetAbiError(`Facet failed to instantiate: ${messageOf(e)}`);
+  }
+  const exports = instance.exports as {
+    memory?: unknown;
+    alloc?: unknown;
+    run2d?: unknown;
+  };
+  const { memory, alloc, run2d } = exports;
+  if (
+    !(memory instanceof WebAssembly.Memory) ||
+    typeof alloc !== "function" ||
+    typeof run2d !== "function"
+  ) {
+    throw new FacetAbiError(
+      "Facet instance is missing required exports (memory, alloc, run2d)",
+    );
+  }
+  if (alloc.length !== 1 || run2d.length !== 5) {
+    throw new FacetAbiError(
+      `Facet export arity is wrong: alloc/${alloc.length} run2d/${run2d.length} (expected alloc/1 run2d/5)`,
+    );
+  }
+
+  const inPtr = callGuest("alloc", () => alloc(inByteLen));
+  writeFeaturesLE(memory, inPtr, features);
+  const outPtr = callGuest("alloc", () => alloc(outByteLen));
+  ensureRange(memory, outPtr, outByteLen);
+  callGuest("run2d", () => run2d(inPtr, outPtr, cols, rows, stride));
+  return readTokensLE(memory, outPtr, ncells);
+}
+
 /** Write `features` as little-endian `f32` at `ptr`, bounds-checked. */
 function writeFeaturesLE(
   memory: WebAssembly.Memory,

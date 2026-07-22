@@ -7,6 +7,11 @@ export {
   FacetAbiError,
   checkedWasmByteLen,
 } from "./abi.ts";
-export { validateFacetModule, compileFacet, runFacetMap } from "./host.ts";
+export {
+  validateFacetModule,
+  compileFacet,
+  runFacetMap,
+  runFacetMap2d,
+} from "./host.ts";
 export { runFacetSandboxed, FacetTimeoutError } from "./sandbox.ts";
 export type { SandboxOptions } from "./sandbox.ts";
