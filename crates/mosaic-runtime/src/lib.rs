@@ -239,11 +239,18 @@ impl Sandbox {
         let ncells_i32: i32 = ncells.try_into().map_err(|_| anyhow!("too many cells"))?;
         let stride_i32: i32 = stride.try_into().map_err(|_| anyhow!("stride too large"))?;
 
-        self.run_marshalled(facet, limits, features, ncells, |store, instance, in_ptr, out_ptr| {
-            let run = instance.get_typed_func::<(i32, i32, i32, i32), ()>(&mut *store, "run")?;
-            run.call(&mut *store, (in_ptr, out_ptr, ncells_i32, stride_i32))?;
-            Ok(())
-        })
+        self.run_marshalled(
+            facet,
+            limits,
+            features,
+            ncells,
+            |store, instance, in_ptr, out_ptr| {
+                let run =
+                    instance.get_typed_func::<(i32, i32, i32, i32), ()>(&mut *store, "run")?;
+                run.call(&mut *store, (in_ptr, out_ptr, ncells_i32, stride_i32))?;
+                Ok(())
+            },
+        )
     }
 
     /// Run a **propagation** Facet (decision D5): like [`run_map`], but the guest
@@ -279,11 +286,21 @@ impl Sandbox {
         let rows_i32: i32 = rows.try_into().map_err(|_| anyhow!("too many rows"))?;
         let stride_i32: i32 = stride.try_into().map_err(|_| anyhow!("stride too large"))?;
 
-        self.run_marshalled(facet, limits, features, ncells, |store, instance, in_ptr, out_ptr| {
-            let run = instance.get_typed_func::<(i32, i32, i32, i32, i32), ()>(&mut *store, "run2d")?;
-            run.call(&mut *store, (in_ptr, out_ptr, cols_i32, rows_i32, stride_i32))?;
-            Ok(())
-        })
+        self.run_marshalled(
+            facet,
+            limits,
+            features,
+            ncells,
+            |store, instance, in_ptr, out_ptr| {
+                let run = instance
+                    .get_typed_func::<(i32, i32, i32, i32, i32), ()>(&mut *store, "run2d")?;
+                run.call(
+                    &mut *store,
+                    (in_ptr, out_ptr, cols_i32, rows_i32, stride_i32),
+                )?;
+                Ok(())
+            },
+        )
     }
 }
 

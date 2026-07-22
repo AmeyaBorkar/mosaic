@@ -54,10 +54,7 @@ pub extern "C" fn run2d(in_ptr: i32, out_ptr: i32, cols: i32, rows: i32, stride:
     let ncells = cols.saturating_mul(rows);
 
     let features = unsafe {
-        core::slice::from_raw_parts_mut(
-            in_ptr as usize as *mut f32,
-            ncells.saturating_mul(stride),
-        )
+        core::slice::from_raw_parts_mut(in_ptr as usize as *mut f32, ncells.saturating_mul(stride))
     };
     let out = unsafe { core::slice::from_raw_parts_mut(out_ptr as usize as *mut u32, ncells) };
 

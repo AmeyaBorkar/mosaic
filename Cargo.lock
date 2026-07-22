@@ -352,6 +352,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dither"
+version = "0.0.0"
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1059,6 +1063,7 @@ dependencies = [
 name = "tessera-ascii"
 version = "0.0.0"
 dependencies = [
+ "dither",
  "glyph-atlas",
  "libm",
  "mosaic-core",
