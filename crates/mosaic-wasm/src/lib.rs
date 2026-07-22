@@ -53,10 +53,18 @@ impl FeatureBuffer {
         self.cols.saturating_mul(self.rows)
     }
 
-    /// A copy of the feature values as a `Float32Array` — the Facet's input.
+    /// A zero-copy `Float32Array` **view** of the feature values — the Facet's input.
+    ///
+    /// The view aliases this module's wasm linear memory, so it must be consumed
+    /// (copied out, or handed to the Facet host, which copies it into the guest
+    /// immediately) before any subsequent call into this module — a memory growth
+    /// would detach it. Avoids cloning the whole buffer on every read.
     #[wasm_bindgen(getter)]
-    pub fn data(&self) -> Vec<f32> {
-        self.data.clone()
+    pub fn data(&self) -> js_sys::Float32Array {
+        // SAFETY: the returned view is copied by the caller before any wasm allocation
+        // (facet-abi marshals it into the guest immediately), so it never outlives the
+        // buffer it borrows.
+        unsafe { js_sys::Float32Array::view(&self.data) }
     }
 }
 

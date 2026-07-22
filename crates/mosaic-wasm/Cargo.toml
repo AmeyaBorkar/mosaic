@@ -14,3 +14,5 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 tessera-ascii = { path = "../tessera-ascii" }
 wasm-bindgen = "0.2"
+# Zero-copy Float32Array view of the feature buffer (avoids cloning it on read).
+js-sys = "0.3"

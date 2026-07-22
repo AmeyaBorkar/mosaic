@@ -9,3 +9,6 @@ publish = false
 [dependencies]
 wasmtime = "47"
 anyhow = "1"
+# Safe zero-copy f32<->u8 reinterpret for the little-endian marshalling fast path
+# (keeps #![forbid(unsafe_code)]); the big-endian fallback uses to_le_bytes.
+bytemuck = "1"

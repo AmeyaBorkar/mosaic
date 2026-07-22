@@ -185,24 +185,45 @@ impl Sandbox {
         let alloc = instance.get_typed_func::<i32, i32>(&mut store, "alloc")?;
         let run = instance.get_typed_func::<(i32, i32, i32, i32), ()>(&mut store, "run")?;
 
-        // Marshal input features as little-endian f32.
-        let mut in_bytes = Vec::with_capacity(in_byte_len);
-        for f in features {
-            in_bytes.extend_from_slice(&f.to_le_bytes());
+        // Write input features as little-endian f32 straight into guest memory. On a
+        // little-endian host this is a zero-intermediate cast (`bytemuck::cast_slice`
+        // is safe); big-endian keeps the portable byte loop, since the ABI is
+        // documented little-endian.
+        let in_ptr = alloc.call(&mut store, in_byte_len as i32)?;
+        #[cfg(target_endian = "little")]
+        memory.write(
+            &mut store,
+            in_ptr as usize,
+            bytemuck::cast_slice::<f32, u8>(features),
+        )?;
+        #[cfg(target_endian = "big")]
+        {
+            let mut in_bytes = Vec::with_capacity(in_byte_len);
+            for f in features {
+                in_bytes.extend_from_slice(&f.to_le_bytes());
+            }
+            memory.write(&mut store, in_ptr as usize, &in_bytes)?;
         }
 
-        let in_ptr = alloc.call(&mut store, in_byte_len as i32)?;
-        memory.write(&mut store, in_ptr as usize, &in_bytes)?;
         let out_ptr = alloc.call(&mut store, out_byte_len as i32)?;
-
         run.call(&mut store, (in_ptr, out_ptr, ncells_i32, stride_i32))?;
 
-        let mut out_bytes = vec![0u8; out_byte_len];
-        memory.read(&store, out_ptr as usize, &mut out_bytes)?;
-        let out = out_bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
+        // Read output tokens back — directly into the u32 buffer on little-endian.
+        let mut out = vec![0u32; ncells];
+        #[cfg(target_endian = "little")]
+        memory.read(
+            &store,
+            out_ptr as usize,
+            bytemuck::cast_slice_mut::<u32, u8>(&mut out),
+        )?;
+        #[cfg(target_endian = "big")]
+        {
+            let mut out_bytes = vec![0u8; out_byte_len];
+            memory.read(&store, out_ptr as usize, &mut out_bytes)?;
+            for (dst, c) in out.iter_mut().zip(out_bytes.chunks_exact(4)) {
+                *dst = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+            }
+        }
         Ok(out)
     }
 }
