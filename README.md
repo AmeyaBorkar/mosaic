@@ -63,20 +63,26 @@ The full pipeline is implemented and proven end-to-end, **native and browser**:
   (the shareable artifact the registry will store and the shell will render), rendered
   through a host `LayerResolver`; proven driving the real engines to one artifact and stable
   across a serialize → parse → render round-trip.
+- **Facet DSL (O3)** — `mosaic-vm` (a `no_std`, validated, deterministic bytecode VM) +
+  `mosaic-dsl` (a small expression language → bytecode) + `facets/interp` (one interpreter
+  Facet). Authors write text, not `no_std` Rust; the bytecode runs untrusted in the same
+  sandbox. Proven: a DSL `ramp(luma, …)` renders byte-identical to native, source text to
+  sandboxed glyphs.
 - **`packages/facet-abi`** — the browser-side Facet host: mirrors the native ABI
   and sandboxes untrusted Facets in a timeout Worker.
 - **Facets** — `ramp` (density + edges), `structural` (L2 glyph-match), and `dither`
   (1-bit Floyd–Steinberg error-diffusion — the propagation/feedback class via the 2-D
   `run2d` ABI), plus `spin`/`liar` adversarial fixtures for the sandbox tests.
 
-**Verification:** 93 Rust tests + 24 JS tests, `clippy -D warnings` clean, with
+**Verification:** 112 Rust tests + 24 JS tests, `clippy -D warnings` clean, with
 adversarial sandbox tests, native≡wasm conformance sweeps for **both** engines
 (preview == render), a cross-domain proof that one Facet binary renders images and audio
-identically, and a native≡browser proof that a cross-engine composed artifact is
-byte-identical.
+identically, a native≡browser proof that a cross-engine composed artifact is byte-identical,
+and a proof that a DSL-authored Facet runs untrusted in the sandbox matching its reference.
 
-Not yet built (see the architecture doc): the Facet DSL (O3), the registry + conformance
-gate, an authoritative server render endpoint, and the web UI shell.
+With O3 settled, **every open question from the vision (O1–O5, O4.1) is now closed.** What's
+left is platform build-out, not contract design: the conformance gate, the registry (+auth),
+an authoritative server render endpoint, and the web UI shell.
 
 ## Repository layout
 
@@ -90,7 +96,9 @@ crates/
   tessera-spectral/# second engine: audio → spectrogram art (contract universality, O5)
   mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose + Canvas
   mosaic-compose/  # declarative, JSON-serializable Compositions (O4.1) rendered via a resolver
-facets/            # guest Facets (Rust → wasm): ramp, structural, dither, spin, liar
+  mosaic-vm/       # DSL bytecode VM (no_std): validated, deterministic per-cell interpreter (O3)
+  mosaic-dsl/      # the Facet DSL compiler: expression text → bytecode (O3)
+facets/            # guest Facets (Rust → wasm): ramp, structural, dither, spin, liar, interp
 packages/
   facet-abi/       # browser Facet host (TypeScript): ABI mirror + Worker sandbox
 docs/              # architecture and design notes

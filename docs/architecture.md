@@ -287,12 +287,39 @@ guarantee — no untrusted code in the compositor, and the final text passes the
 untrusted-glyph boundary. Proven end-to-end: a JSON composition drives the real image and
 audio engines to one artifact, byte-stable across a serialize → parse → render round-trip.
 
+### D14 — Facet DSL: bytecode + one interpreter Facet *(settled — O3)*
+Authoring a Facet no longer requires `no_std` Rust. `mosaic-dsl` compiles a small expression
+language — a per-cell expression over named features and params producing one glyph — to a
+compact bytecode; a single interpreter Facet (`facets/interp`, wrapping the shared
+`mosaic-vm`) runs *any* bytecode in the existing sandbox. This was chosen over a wasm-codegen
+backend (a large build emitting opaque output) and over host-side AST interpretation (which
+would widen the attack surface): the bytecode interpreter reuses the already-audited sandbox
+unchanged, needs no compiler backend, and the shareable-bytecode model mirrors D13.
+
+The layering separates the ISA from the surface. `mosaic-vm` is the contract — a validated,
+`no_std`, forbid-unsafe stack VM: every feature/param/table index is bounds-checked, the
+stack effect is statically simulated, and v1 is straight-line so termination is guaranteed;
+only `f32` arithmetic and libm `floorf`/`truncf` (no transcendentals, no `mul_add`) so it is
+bit-identical native vs wasm. `mosaic-dsl` is one frontend; a future visual/node editor
+could target the same bytecode. The VM is domain-agnostic — glyph ramps and edge sets are
+codepoint tables in the *program*, not baked in.
+
+Untrusted bytecode is validated twice (host-side by the compiler's self-check, and again
+inside the sandbox before execution). `mosaic-runtime::run_program` loads it via the Facet's
+`load_program` export, then runs the gather ABI with the same bounds-checks, zero imports,
+and metering as any Facet. Proven end-to-end: an author's DSL text compiles and runs
+untrusted in the sandbox byte-identical to the native reference — `ramp(luma, …)` matches
+native density exactly, and a branchy density-or-edge Facet is deterministic and
+non-degenerate. v1 targets the gather ABI; propagation (`run2d`) is an additive follow-on.
+
 ## Open decisions (from the vision — deliberately not yet frozen)
 
-- *O1 (neighbor visibility), O2 (ASCII vocabulary), O4 (composition), O4.1 (declarative
-  composition), and O5 (contract universality) are settled — see D5, D6, D11, D12, D13.*
-- **O3 — Facet DSL syntax & semantics.** Deferred by D3 until the contract holds. Two
-  engines now share it unchanged (D11), so a DSL is better-informed — the last open O.
+- *All of the vision's open questions — O1, O2, O4, O4.1, O5, and now O3 — are settled;
+  see D5, D6 and D11–D14.*
+- What remains is **platform build-out, not contract design**: the conformance gate
+  (registration-time wasm-feature + golden-token check), the registry (+ auth/moderation)
+  that stores Facets and Compositions, an authoritative server render endpoint, and the web
+  shell. These are engineering, not open decisions.
 
 ## Repository layout
 
@@ -306,6 +333,8 @@ crates/
   tessera-spectral/# second engine: audio PCM -> spectrogram art (proves contract universality, O5)
   mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose + Canvas (built)
   mosaic-compose/  # declarative, JSON-serializable Compositions (O4.1) rendered via a resolver
+  mosaic-vm/       # DSL bytecode VM (no_std): validated, deterministic per-cell interpreter (O3)
+  mosaic-dsl/      # the Facet DSL compiler: expression text -> bytecode (O3)
 apps/
   web/             # Next.js shell: editor, controls, live preview, registry   (planned)
 facets/ramp/       # bootstrap Facet (Rust -> wasm): density ramp + edge glyphs
@@ -313,6 +342,7 @@ facets/spin/       # adversarial Facet: run() never returns (browser-timeout tes
 facets/liar/       # adversarial Facet: alloc() returns a wild pointer (bounds test)
 facets/structural/ # L2 Facet: sub-cell patch -> nearest atlas glyph
 facets/dither/     # propagation Facet: 1-bit error-diffusion dithering (run2d)
+facets/interp/     # DSL interpreter Facet: runs mosaic-vm bytecode in the sandbox (O3)
 packages/
   facet-abi/       # browser Facet host: mirrors run_map, timeout-Worker sandbox
 docs/              # this document and future design notes

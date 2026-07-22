@@ -44,8 +44,8 @@ jobs:
       - name: Test (workspace)
         run: cargo test --workspace --all-features
 
-      - name: Engine + bridge compile to wasm32 (browser target)
-        run: cargo build -p glyph-atlas -p tessera-ascii -p mosaic-wasm --target wasm32-unknown-unknown
+      - name: Engine + bridge + VM compile to wasm32 (browser / Facet target)
+        run: cargo build -p glyph-atlas -p tessera-ascii -p mosaic-vm -p mosaic-wasm --target wasm32-unknown-unknown
 
       - name: Golden vectors are fresh
         run: bash scripts/verify-fixtures.sh
