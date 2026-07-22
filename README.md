@@ -40,7 +40,8 @@ hosts together — so **preview == render** is verified, not hoped.
 The full pipeline is implemented and proven end-to-end, **native and browser**:
 
 - **`mosaic-core`** — the domain-agnostic engine contract (feature schema, Facet
-  manifest, access model).
+  manifest, access model) **and** the shared text-grid composition (slot 5) every
+  engine reuses through one untrusted-output boundary.
 - **`mosaic-runtime`** — the pure, fuel-metered, memory/table/instance-bounded
   wasmtime sandbox that executes untrusted Facets.
 - **`glyph-atlas`** — a shared `no_std` glyph atlas + sub-cell matcher, compiled
@@ -49,6 +50,9 @@ The full pipeline is implemented and proven end-to-end, **native and browser**:
 - **`tessera-ascii`** — the first engine (image → ASCII) with the full vocabulary:
   **L0** luminance density, **L1** Sobel gradient edges, **L2** sub-cell structural
   glyph-matching.
+- **`tessera-spectral`** — a **second engine** (audio PCM → spectrogram art) that
+  proves the contract is universal (O5): the *existing image Facets* run **unmodified**
+  in the sandbox over its audio features, byte-identical to the native reference.
 - **`mosaic-wasm`** — wasm-bindgen browser bindings (`extract` + `compose`, the
   same Rust the server runs).
 - **`packages/facet-abi`** — the browser-side Facet host: mirrors the native ABI
@@ -57,22 +61,25 @@ The full pipeline is implemented and proven end-to-end, **native and browser**:
   (1-bit Floyd–Steinberg error-diffusion — the propagation/feedback class via the 2-D
   `run2d` ABI), plus `spin`/`liar` adversarial fixtures for the sandbox tests.
 
-**Verification:** 49 Rust tests + 16 JS tests, `clippy -D warnings` clean, with
-adversarial sandbox tests and native≡wasm conformance sweeps over random images.
+**Verification:** 74 Rust tests + 20 JS tests, `clippy -D warnings` clean, with
+adversarial sandbox tests, native≡wasm conformance sweeps over random images, and a
+cross-domain proof that one Facet binary renders images and audio identically.
 
 Not yet built (see the architecture doc): the Facet DSL (O3), cross-engine
-composition (O4), a second domain (O5), the registry, and the web UI shell.
+composition (O4, now unblocked), the registry + conformance gate, and the web UI shell.
 
 ## Repository layout
 
 ```
 crates/
-  mosaic-core/     # engine contract, feature vocabulary, Facet manifest
+  mosaic-core/     # engine contract, feature vocab, Facet manifest, shared composition (slot 5)
   glyph-atlas/     # shared no_std L2 glyph atlas + SSD matcher (engine + Facet)
+  dither/          # shared no_std Floyd–Steinberg error-diffusion (engine + Facet)
   mosaic-runtime/  # WASM host: pure, fuel-metered, memory-bounded Facet sandbox
-  tessera-ascii/   # the first engine: image → ASCII (L0/L1/L2)
+  tessera-ascii/   # first engine: image → ASCII (L0/L1/L2 + dithering)
+  tessera-spectral/# second engine: audio → spectrogram art (contract universality, O5)
   mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose
-facets/            # guest Facets (Rust → wasm): ramp, structural, spin, liar
+facets/            # guest Facets (Rust → wasm): ramp, structural, dither, spin, liar
 packages/
   facet-abi/       # browser Facet host (TypeScript): ABI mirror + Worker sandbox
 docs/              # architecture and design notes

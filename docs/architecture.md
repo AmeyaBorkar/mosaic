@@ -224,27 +224,49 @@ the propagation path inherits every sandbox guarantee. A Facet declares which AB
 implements by which entry point it exports; the host requires exactly one of
 `run`/`run2d` to be present.
 
+### D11 — Second engine `tessera-spectral`; composition is a substrate primitive *(settled — O5)*
+The platform's load-bearing claim is that the five-slot contract (D5/D6) is
+*universal*, not shaped around images. `tessera-spectral` (audio PCM → spectrogram text
+art) tests it with a different Input (a 1-D signal, not RGBA) and a different feature
+vocabulary (per-band spectral energy via a Hann-windowed Goertzel filterbank, not
+luminance), while filling the same five slots.
+
+The proof is a passing test, not an assertion: the *existing image Facets* —
+`facet-ramp` (gather) and `facet-dither` (propagation), the exact WASM binaries,
+byte-identical by SHA-256 — run **unmodified** in the sandbox over spectral features and
+produce output byte-identical to the native spectral references, across 32 random
+signals spanning sample rates and grid shapes. A Facet is confirmed to be a
+domain-agnostic `feature-vector → token` function: it reads slot 0 and cannot tell image
+luminance from audio band energy.
+
+Building the second engine forced the correct layering. Text-grid composition
+(`compose_codepoints` + untrusted-glyph masking) is domain-agnostic, so it moved out of
+`tessera-ascii` into `mosaic-core::compose` (Mosaic slot 5). Both engines now share one
+composition implementation and one untrusted-text boundary — the crate graph enforces
+the layering instead of convention. Determinism uses the D6 discipline (libm for every
+transcendental, no `mul_add`), so the STFT is bit-reproducible; browser bindings + a
+native↔wasm golden for this extractor are the remaining follow-on (the ASCII engine
+already has that parity, and this engine is built for it).
+
 ## Open decisions (from the vision — deliberately not yet frozen)
 
-- *O1 (neighbor visibility) and O2 (ASCII feature vocabulary) are now settled —
-  see D5 and D6.*
-- **O3 — Facet DSL syntax & semantics.** Deferred by D3 until the contract holds.
-- **O4 — Cross-engine composition / blending.** How Facets combine once more
-  than one engine exists.
-- **O5 — Contract universality.** Which slots are genuinely domain-independent
-  vs. artifacts of the first domain (ASCII vs. data→art is the stress test). For
-  this reason the master `Tessera` trait is left as a documented sketch until the
-  concrete ASCII engine is built against the core.
+- *O1 (neighbor visibility), O2 (ASCII feature vocabulary), and O5 (contract
+  universality) are now settled — see D5, D6, and D11.*
+- **O3 — Facet DSL syntax & semantics.** Deferred by D3 until the contract holds. Two
+  engines now share it unchanged (D11), so a DSL is better-informed — but still deferred.
+- **O4 — Cross-engine composition / blending.** How Facets combine once more than one
+  engine exists — **now unblocked** by the second engine (D11), not yet designed.
 
 ## Repository layout
 
 ```
 crates/
-  mosaic-core/     # engine contract, feature vocabulary, Facet manifest, render model
+  mosaic-core/     # engine contract, feature vocab, Facet manifest, shared text composition (slot 5)
   glyph-atlas/     # shared no_std L2 glyph atlas + SSD matcher (engine + Facet, no drift)
   dither/          # shared no_std Floyd-Steinberg error-diffusion (engine + Facet, no drift)
   mosaic-runtime/  # WASM host: pure, fuel-metered, memory-bounded Facet sandbox
-  tessera-ascii/   # the first engine (L0/L1 density+edges, L2 structural glyph-match)
+  tessera-ascii/   # first engine: images (L0/L1 density+edges, L2 structural glyph-match)
+  tessera-spectral/# second engine: audio PCM -> spectrogram art (proves contract universality, O5)
   mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose (built)
 apps/
   web/             # Next.js shell: editor, controls, live preview, registry   (planned)
