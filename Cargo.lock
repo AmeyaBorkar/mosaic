@@ -738,6 +738,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mosaic-vm"
+version = "0.0.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "mosaic-wasm"
 version = "0.0.0"
 dependencies = [

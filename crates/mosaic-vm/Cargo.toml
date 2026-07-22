@@ -1,0 +1,15 @@
+[package]
+name = "mosaic-vm"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Mosaic Facet DSL bytecode VM (O3): a small, safe, deterministic per-cell interpreter shared by the host reference and the wasm interpreter Facet."
+publish = false
+
+# no_std, no alloc: the interpreter runs directly over a validated byte slice with a fixed
+# value stack, so it compiles into the wasm interpreter Facet under the same no_std/no-heap
+# constraints as every other Facet, and into the host as a reference.
+[dependencies]
+# Deterministic, pure-Rust floorf/truncf: bit-identical across the native and wasm builds
+# (core lacks these on f32 in no_std), the same discipline the engines use for libm.
+libm = "0.2"
