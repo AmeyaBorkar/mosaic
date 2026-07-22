@@ -83,3 +83,4 @@ jobs:
           packages/facet-abi/test/timeout.test.ts
           crates/mosaic-wasm/test/pipeline.test.ts
           crates/mosaic-wasm/test/spectral.test.ts
+          crates/mosaic-wasm/test/composite.test.ts

@@ -12,6 +12,7 @@
 //! 2. the Facet — feature buffer → per-cell `u32` tokens (`@mosaic/facet-abi`).
 //! 3. [`compose`] — tokens → validated ASCII text (here, wasm).
 
+use mosaic_core::composite;
 use tessera_ascii::feature;
 use tessera_ascii::{Grid, ImageRef, MAX_CELLS};
 use tessera_spectral::{SignalRef, SpectroGrid, feature as spectral_feature};
@@ -175,4 +176,71 @@ pub fn extract_spectral_features(
 #[wasm_bindgen]
 pub fn compose(cols: u32, rows: u32, codepoints: &[u32]) -> String {
     tessera_ascii::compose_codepoints(cols, rows, codepoints)
+}
+
+/// A composition surface for the browser — the wasm-bindgen face of
+/// [`mosaic_core::composite::Canvas`] (O4). Build it, [`Canvas::place`] rendered layers
+/// (each a token grid plus per-cell coverage) with a blend mode and offset, then
+/// [`Canvas::into_text`]. Composition runs host-side on already-produced tokens — from the
+/// same engine or different ones — and `into_text` routes every cell through the shared
+/// composer, so a composed artifact inherits the untrusted-glyph boundary exactly as a
+/// single render does.
+#[wasm_bindgen]
+pub struct Canvas {
+    inner: composite::Canvas,
+}
+
+#[wasm_bindgen]
+impl Canvas {
+    /// A new, fully transparent `cols × rows` canvas. Throws on a zero or oversized grid.
+    #[wasm_bindgen(constructor)]
+    pub fn new(cols: u32, rows: u32) -> Result<Canvas, JsError> {
+        let inner = composite::Canvas::new(cols, rows).map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(Canvas { inner })
+    }
+
+    /// Composite a layer onto the canvas with its top-left at (`row_off`, `col_off`) and
+    /// `blend` — one of `"over"`, `"under"`, `"replace"`, `"stipple"`. `tokens` and
+    /// `coverage` are the layer's `layer_cols × layer_rows` grid, row-major, coverage in
+    /// `[0, 1]`. Throws on a bad blend name or a size mismatch.
+    // A flat argument list is the natural shape for this wasm-bindgen boundary method;
+    // bundling into a struct would only move the ceremony into JS.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place(
+        &mut self,
+        tokens: &[u32],
+        coverage: &[f32],
+        layer_cols: u32,
+        layer_rows: u32,
+        row_off: i32,
+        col_off: i32,
+        blend: &str,
+    ) -> Result<(), JsError> {
+        let blend = parse_blend(blend)?;
+        let layer = composite::Layer::with_coverage(
+            layer_cols,
+            layer_rows,
+            tokens.to_vec(),
+            coverage.to_vec(),
+        )
+        .map_err(|e| JsError::new(&e.to_string()))?;
+        self.inner.place(&layer, row_off, col_off, blend);
+        Ok(())
+    }
+
+    /// Resolve the canvas to text: transparent cells become `background`, then the shared
+    /// composer validates every glyph. Consumes the canvas.
+    pub fn into_text(self, background: u32) -> String {
+        self.inner.into_text(background)
+    }
+}
+
+fn parse_blend(name: &str) -> Result<composite::Blend, JsError> {
+    match name {
+        "over" => Ok(composite::Blend::Over),
+        "under" => Ok(composite::Blend::Under),
+        "replace" => Ok(composite::Blend::Replace),
+        "stipple" => Ok(composite::Blend::StippleOver),
+        other => Err(JsError::new(&format!("unknown blend mode: {other:?}"))),
+    }
 }
