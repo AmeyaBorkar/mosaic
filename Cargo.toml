@@ -6,6 +6,7 @@ resolver = "3"
 members = [
     "crates/mosaic-core",
     "crates/glyph-atlas",
+    "crates/dither",
     "crates/tessera-ascii",
     "crates/mosaic-runtime",
     "crates/mosaic-wasm",

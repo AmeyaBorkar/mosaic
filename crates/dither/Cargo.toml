@@ -1,0 +1,11 @@
+[package]
+name = "dither"
+version = "0.0.0"
+# Self-contained (not workspace-inherited) so the excluded, wasm-only Facet crate
+# can build it as a path dependency from outside the workspace.
+edition = "2024"
+rust-version = "1.97"
+description = "Shared no_std Floyd-Steinberg error-diffusion for the ASCII engine's propagation method (D5). Compiled into both the native engine and the wasm Facet, so there is no drift."
+publish = false
+
+[dependencies]
