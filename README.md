@@ -53,17 +53,18 @@ The full pipeline is implemented and proven end-to-end, **native and browser**:
 - **`tessera-spectral`** — a **second engine** (audio PCM → spectrogram art) that
   proves the contract is universal (O5): the *existing image Facets* run **unmodified**
   in the sandbox over its audio features, byte-identical to the native reference.
-- **`mosaic-wasm`** — wasm-bindgen browser bindings (`extract` + `compose`, the
-  same Rust the server runs).
+- **`mosaic-wasm`** — wasm-bindgen browser bindings (image **and** audio `extract`
+  + `compose`, the same Rust the server runs), proven bit-identical to native.
 - **`packages/facet-abi`** — the browser-side Facet host: mirrors the native ABI
   and sandboxes untrusted Facets in a timeout Worker.
 - **Facets** — `ramp` (density + edges), `structural` (L2 glyph-match), and `dither`
   (1-bit Floyd–Steinberg error-diffusion — the propagation/feedback class via the 2-D
   `run2d` ABI), plus `spin`/`liar` adversarial fixtures for the sandbox tests.
 
-**Verification:** 74 Rust tests + 20 JS tests, `clippy -D warnings` clean, with
-adversarial sandbox tests, native≡wasm conformance sweeps over random images, and a
-cross-domain proof that one Facet binary renders images and audio identically.
+**Verification:** 74 Rust tests + 22 JS tests, `clippy -D warnings` clean, with
+adversarial sandbox tests, native≡wasm conformance sweeps for **both** engines
+(preview == render), and a cross-domain proof that one Facet binary renders images and
+audio identically.
 
 Not yet built (see the architecture doc): the Facet DSL (O3), cross-engine
 composition (O4, now unblocked), the registry + conformance gate, and the web UI shell.

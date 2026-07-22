@@ -244,9 +244,11 @@ Building the second engine forced the correct layering. Text-grid composition
 `tessera-ascii` into `mosaic-core::compose` (Mosaic slot 5). Both engines now share one
 composition implementation and one untrusted-text boundary — the crate graph enforces
 the layering instead of convention. Determinism uses the D6 discipline (libm for every
-transcendental, no `mul_add`), so the STFT is bit-reproducible; browser bindings + a
-native↔wasm golden for this extractor are the remaining follow-on (the ASCII engine
-already has that parity, and this engine is built for it).
+transcendental, no `mul_add`), so the STFT is bit-reproducible — and
+`mosaic-wasm::extract_spectral_features` plus a native↔wasm golden
+(`crates/mosaic-wasm/test/spectral.test.ts`) now prove it: the browser path is
+bit-identical to native, giving this engine the same preview == render guarantee as the
+ASCII engine, end to end.
 
 ## Open decisions (from the vision — deliberately not yet frozen)
 
