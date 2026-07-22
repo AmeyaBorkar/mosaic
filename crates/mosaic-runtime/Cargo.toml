@@ -17,3 +17,5 @@ bytemuck = "1"
 # The bytecode VM, as the host reference the sandboxed interpreter Facet is checked
 # against in the run_program integration test.
 mosaic-vm = { path = "../mosaic-vm" }
+# The DSL compiler, for the end-to-end proof: author text -> bytecode -> sandbox.
+mosaic-dsl = { path = "../mosaic-dsl" }
