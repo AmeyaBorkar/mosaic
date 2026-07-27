@@ -658,6 +658,42 @@ pub fn compile(source: &str, schema: &Schema) -> Result<Vec<u8>, CompileError> {
     emit(&ast, &mut code);
     code.push(op::END);
 
+    // Reject anything that would truncate in the u16 header fields below. A glyph set
+    // of >65 535 chars would otherwise write length 0 while still emitting its full
+    // payload, desyncing the program's sections so the VM reads the code section out of
+    // the table bytes — source and executed bytecode would diverge. Report the VM's own
+    // admission limits as clean user errors instead of the opaque self-check failure.
+    if schema.params.len() > mosaic_vm::MAX_PARAMS {
+        return err(
+            0,
+            format!(
+                "schema declares {} parameters, exceeding the maximum of {}",
+                schema.params.len(),
+                mosaic_vm::MAX_PARAMS
+            ),
+        );
+    }
+    if p.tables.len() > mosaic_vm::MAX_TABLES {
+        return err(
+            0,
+            format!(
+                "program uses {} glyph sets, exceeding the maximum of {}",
+                p.tables.len(),
+                mosaic_vm::MAX_TABLES
+            ),
+        );
+    }
+    if let Some(t) = p.tables.iter().find(|t| t.len() > mosaic_vm::MAX_TABLE_LEN) {
+        return err(
+            0,
+            format!(
+                "a glyph set has {} characters, exceeding the maximum of {}",
+                t.len(),
+                mosaic_vm::MAX_TABLE_LEN
+            ),
+        );
+    }
+
     // Assemble the program: magic, stride, params, tables, code.
     let mut b = Vec::new();
     b.extend_from_slice(&mosaic_vm::MAGIC.to_le_bytes());
@@ -737,6 +773,20 @@ mod tests {
         let out = run1(&bytes, &features, 3);
         assert_eq!(out[0], b'#' as u32);
         assert_eq!(out[1], native_density(0.5));
+    }
+
+    #[test]
+    fn oversized_glyph_set_is_a_clean_error_not_a_truncation() {
+        // A glyph set longer than MAX_TABLE_LEN must be a clean, human-readable error,
+        // never a silent u16 truncation that desyncs the program's sections. Audit M8.
+        let big = "x".repeat(mosaic_vm::MAX_TABLE_LEN + 1);
+        let src = format!("ramp(luma, \"{big}\")");
+        let e = compile(&src, &ASCII_SCHEMA).unwrap_err();
+        assert!(
+            e.message.contains("glyph set"),
+            "expected a glyph-set-too-large error, got: {}",
+            e.message
+        );
     }
 
     #[test]
