@@ -224,7 +224,13 @@ fn lex(src: &str) -> Result<Vec<(Tok, usize)>, CompileError> {
                 out.push((Tok::Ident(src[i..j].to_string()), start));
                 i = j;
             }
-            _ => return err(start, format!("unexpected character `{}`", c as char)),
+            _ => {
+                // Decode the real char (i is at a char boundary — all prior tokens are
+                // ASCII), not `c as char` which would mangle a UTF-8 lead byte to Latin-1
+                // and name a character the author never typed. Audit L5.
+                let ch = src[i..].chars().next().unwrap_or(c as char);
+                return err(start, format!("unexpected character `{ch}`"));
+            }
         }
     }
     out.push((Tok::Eof, src.len()));
@@ -320,11 +326,18 @@ enum Expr {
 
 // ---- parser + table collection ----
 
+/// Maximum expression nesting depth. The recursive-descent parser (and the recursive
+/// `emit` and `Drop` of the AST) run host-side, outside the sandbox, so an untrusted
+/// source of deeply nested parens or unary operators would otherwise overflow the native
+/// stack — an uncatchable abort, not a `CompileError`. 256 is far beyond any real Facet.
+const MAX_PARSE_DEPTH: usize = 256;
+
 struct Parser<'a> {
     toks: Vec<(Tok, usize)>,
     pos: usize,
     schema: &'a Schema<'a>,
     tables: Vec<Vec<u32>>,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -446,6 +459,18 @@ impl<'a> Parser<'a> {
         Ok(e)
     }
     fn unary(&mut self) -> Result<Expr, CompileError> {
+        // Every descent level (paren nesting and unary chains alike) passes through here
+        // exactly once, so guarding depth here bounds the whole parser's stack use.
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            self.depth -= 1;
+            return err(self.at(), "expression nests too deeply");
+        }
+        let r = self.unary_inner();
+        self.depth -= 1;
+        r
+    }
+    fn unary_inner(&mut self) -> Result<Expr, CompileError> {
         if self.eat(&Tok::Minus) {
             Ok(Expr::Neg(Box::new(self.unary()?)))
         } else if self.eat(&Tok::Bang) {
@@ -648,6 +673,7 @@ pub fn compile(source: &str, schema: &Schema) -> Result<Vec<u8>, CompileError> {
         pos: 0,
         schema,
         tables: Vec::new(),
+        depth: 0,
     };
     let ast = p.parse()?;
     if p.peek() != &Tok::Eof {
@@ -773,6 +799,26 @@ mod tests {
         let out = run1(&bytes, &features, 3);
         assert_eq!(out[0], b'#' as u32);
         assert_eq!(out[1], native_density(0.5));
+    }
+
+    #[test]
+    fn deeply_nested_source_is_a_clean_error_not_a_stack_overflow() {
+        // Untrusted source compiled host-side: deep nesting must be a CompileError, never
+        // a native stack-overflow abort. Audit L1.
+        let deep = format!("{}1{}", "(".repeat(1000), ")".repeat(1000));
+        let e = compile(&deep, &ASCII_SCHEMA).unwrap_err();
+        assert!(e.message.contains("nests too deeply"), "got: {}", e.message);
+        // Unary chains funnel through the same guard.
+        let unary = format!("{}1", "-".repeat(1000));
+        assert!(compile(&unary, &ASCII_SCHEMA).is_err());
+    }
+
+    #[test]
+    fn non_ascii_error_names_the_real_character() {
+        // The diagnostic must name '×' (U+00D7), not the Latin-1 mojibake of its UTF-8
+        // lead byte. Audit L5.
+        let e = compile("luma × 2", &ASCII_SCHEMA).unwrap_err();
+        assert!(e.message.contains('×'), "got: {}", e.message);
     }
 
     #[test]
