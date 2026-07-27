@@ -12,7 +12,7 @@ anyhow = "1"
 # A cheap structural pre-pass over untrusted module bytes (function count + per-body
 # size) to bound Cranelift compilation cost before Module::new. Pinned to the version
 # wasmtime 47 already uses, so no extra crate enters the graph.
-wasmparser = "0.252"
+wasmparser = "0.254"
 # Safe zero-copy f32<->u8 reinterpret for the little-endian marshalling fast path
 # (keeps #![forbid(unsafe_code)]); the big-endian fallback uses to_le_bytes.
 bytemuck = "1"

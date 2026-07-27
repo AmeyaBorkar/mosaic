@@ -895,7 +895,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "wasmparser 0.252.0",
+ "wasmparser 0.254.0",
  "wat",
 ]
 
@@ -942,7 +942,7 @@ dependencies = [
  "bytemuck",
  "mosaic-dsl",
  "mosaic-vm",
- "wasmparser 0.252.0",
+ "wasmparser 0.254.0",
  "wasmtime",
  "wat",
 ]
@@ -1701,8 +1701,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5769a29f799fbab136aaf65b4fe5384cd7d93fe6fc9ba0dcb6c8382a1f16e27"
 dependencies = [
  "bitflags",
+ "hashbrown 0.17.1",
  "indexmap",
  "semver",
+ "serde",
 ]
 
 [[package]]

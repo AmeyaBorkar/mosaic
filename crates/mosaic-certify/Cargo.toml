@@ -13,7 +13,7 @@ mosaic-runtime = { path = "../mosaic-runtime" }
 # Typed structural inspection of untrusted module bytes (imports, memory/table limits,
 # exports, function bodies) for the static profile gate. Pinned to the version wasmtime 47
 # already uses (via mosaic-runtime), so no extra crate enters the graph.
-wasmparser = "0.252"
+wasmparser = "0.254"
 # The certificate and rejection are serialized by the server (JSON) and the golden emitter.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
