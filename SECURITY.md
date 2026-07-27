@@ -57,4 +57,7 @@ as high severity — both are core invariants of the platform.
 
 In scope: sandbox escape, resource-exhaustion that escapes the configured caps,
 host memory corruption via the Facet ABI, and determinism breaks (preview ≠
-render). Out of scope (for now): the not-yet-built registry, DSL, and web UI.
+render). This explicitly includes the **Facet DSL and its bytecode VM**
+(`mosaic-vm`, `mosaic-dsl`, `facets/interp`): the VM parses and executes untrusted
+bytecode, so a validator bypass or a VM out-of-bounds is a sandbox escape. Out of
+scope (for now): the not-yet-built registry and web UI.
