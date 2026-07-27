@@ -23,3 +23,4 @@ export {
 export type { SandboxOptions } from "./sandbox.ts";
 export { verifyCertificate } from "./certificate.ts";
 export type { AbiKind, Certificate, Probe, ProbeOutcome, Profile } from "./certificate.ts";
+export { applyParams } from "./program.ts";

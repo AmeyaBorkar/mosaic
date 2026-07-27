@@ -124,7 +124,13 @@ pub enum VmError {
     StrideMismatch,
     /// The output buffer was shorter than `ncells`.
     ShortOutput,
+    /// [`patch_params`] was given a value count ≠ the program's declared param count.
+    ParamCountMismatch,
 }
+
+/// Byte offset of the params section in a program, immediately after the 10-byte header
+/// (magic\[4] · stride\[2] · n_params\[2] · n_tables\[2]). One little-endian `f32` per param.
+const PARAMS_OFFSET: usize = 10;
 
 fn read_u16(bytes: &[u8], off: usize) -> Result<u16, VmError> {
     let b = bytes.get(off..off + 2).ok_or(VmError::Truncated)?;
@@ -194,7 +200,7 @@ pub fn validate(bytes: &[u8]) -> Result<Program<'_>, VmError> {
         return Err(VmError::TooLarge);
     }
 
-    let params_off = 10;
+    let params_off = PARAMS_OFFSET;
     let mut off = params_off + n_params * 4;
     if bytes.len() < off {
         return Err(VmError::Truncated);
@@ -530,6 +536,27 @@ pub fn run(
     Ok(())
 }
 
+/// Overwrite a program's param values in place, without recompiling.
+///
+/// The params section is fixed-layout (one `f32` per declared param, right after the header),
+/// so changing a value never alters structure — the patched program validates exactly as the
+/// original did. `values` must have exactly the program's declared param count. This is how a
+/// live control adjusts a Facet: patch, then re-run — no compiler and no round-trip. Returns
+/// [`VmError::ParamCountMismatch`] on a wrong count, or whatever [`validate`] would on a
+/// malformed program.
+pub fn patch_params(program: &mut [u8], values: &[f32]) -> Result<(), VmError> {
+    // `validate` borrows immutably; capture the count, its borrow ends, then we mutate.
+    let n_params = validate(program)?.n_params;
+    if values.len() != n_params {
+        return Err(VmError::ParamCountMismatch);
+    }
+    for (i, value) in values.iter().enumerate() {
+        let off = PARAMS_OFFSET + i * 4;
+        program[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,6 +630,33 @@ mod tests {
             b.extend_from_slice(&self.code);
             b
         }
+    }
+
+    #[test]
+    fn patch_params_updates_a_value_without_recompiling() {
+        // A program whose output is param[0] as a codepoint; one declared param.
+        let mut a = Asm::new(1);
+        let _ = a.param(65.0); // 'A'
+        let mut program = a.loadp(0).finish();
+
+        let run_once = |prog: &[u8]| -> u32 {
+            let p = validate(prog).unwrap();
+            let mut out = [0u32; 1];
+            run(&p, &[0.0], 1, 1, &mut out).unwrap();
+            out[0]
+        };
+        assert_eq!(run_once(&program), 65);
+
+        // Patch to 'B' in place — no recompile — and the program still validates and runs.
+        patch_params(&mut program, &[66.0]).unwrap();
+        assert!(validate(&program).is_ok());
+        assert_eq!(run_once(&program), 66);
+
+        // A wrong value count is rejected.
+        assert_eq!(
+            patch_params(&mut program, &[1.0, 2.0]),
+            Err(VmError::ParamCountMismatch)
+        );
     }
 
     const RAMP: &[u32] = &[0x20, 0x2E, 0x3A, 0x2D, 0x3D, 0x2B, 0x2A, 0x23, 0x25, 0x40]; // " .:-=+*#%@"

@@ -77,4 +77,9 @@ C1 certify program · C2 registry+server program-kind. Docs sweep at the end.
   (`program` + `manifestJson`). Wraps `mosaic-dsl`; `ascii`/`spectral` vocab; native-testable
   `compile_program` core. 3 unit tests incl. **byte-identical to native compile**. Builds to
   wasm32; fmt/clippy/test green.
-- (next) A2 — `patch_params` (native `mosaic-vm` + browser `facet-abi`).
+- **A2 done** — `mosaic_vm::patch_params(program, values)` (in-place, no_std) + browser
+  `facet-abi applyParams(program, values)` mirror: overwrite the params section (LE f32 at
+  offset 10+i*4) without recompiling; patched program still validates. Native test + 3 TS
+  tests (offset correctness + a patched threshold changing the render through the real
+  interp). No wasm drift (DCE'd from interp). Registered in package.json + CI.
+- (next) A3 — browser SDK glue (`packages/mosaic-preview`).
