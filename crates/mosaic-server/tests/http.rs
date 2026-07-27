@@ -9,6 +9,7 @@ use axum::http::{Request, StatusCode};
 use axum::response::Response;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use mosaic_registry::InMemoryStore;
 use mosaic_runtime::Sandbox;
 use mosaic_server::{AppState, AuthConfig, TokenEntry, app};
 use serde_json::Value;
@@ -16,8 +17,8 @@ use tower::ServiceExt;
 
 const FACET_RAMP: &[u8] = include_bytes!("../../tessera-ascii/tests/facet_ramp.wasm");
 
-/// A test app with two principals: `author-token` (alice, author) and `mod-token`
-/// (max, author + moderator).
+/// A test app with three principals: `author-token` (alice, author), `mod-token`
+/// (max, author + moderator), and `reader-token` (bob, no roles).
 fn test_app() -> axum::Router {
     let auth = AuthConfig::from_entries(vec![
         TokenEntry {
@@ -30,11 +31,17 @@ fn test_app() -> axum::Router {
             id: "max".to_string(),
             roles: vec!["author".to_string(), "moderator".to_string()],
         },
+        TokenEntry {
+            token: "reader-token".to_string(),
+            id: "bob".to_string(),
+            roles: vec![],
+        },
     ])
     .unwrap();
     app(AppState {
         sandbox: Arc::new(Sandbox::new().expect("sandbox")),
         auth: Arc::new(auth),
+        registry: Arc::new(InMemoryStore::new()),
     })
 }
 
@@ -226,4 +233,136 @@ async fn whoami_rejects_an_unknown_token() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+fn post_json_auth(uri: &str, body: Value, token: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+async fn publish_ramp(app: &axum::Router, token: &str, name: &str) -> Response {
+    let body = serde_json::json!({ "name": name, "wasm": STANDARD.encode(FACET_RAMP) });
+    app.clone()
+        .oneshot(post_json_auth("/v1/facets", body, token))
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn publish_requires_the_author_role() {
+    let app = test_app();
+    // no token -> 401
+    let body = serde_json::json!({ "name": "X", "wasm": STANDARD.encode(FACET_RAMP) });
+    let resp = app
+        .clone()
+        .oneshot(post_json("/v1/facets", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    // authenticated but no author role -> 403
+    let resp = publish_ramp(&app, "reader-token", "X").await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(json_body(resp).await["error"]["code"], "forbidden");
+}
+
+#[tokio::test]
+async fn publish_certifies_and_stores_certified() {
+    let app = test_app();
+    let resp = publish_ramp(&app, "author-token", "Ramp Deluxe").await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = json_body(resp).await;
+    assert_eq!(body["facet"]["name"], "Ramp Deluxe");
+    assert_eq!(body["facet"]["author"], "alice");
+    assert_eq!(body["facet"]["state"], "certified");
+    assert_eq!(body["facet"]["abiKind"], "gather");
+    assert!(!body["facet"]["id"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn publish_rejects_a_non_conformant_facet() {
+    let app = test_app();
+    let body = serde_json::json!({ "name": "Bad", "wasm": STANDARD.encode(b"not a wasm module") });
+    let resp = app
+        .clone()
+        .oneshot(post_json_auth("/v1/facets", body, "author-token"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(json_body(resp).await["error"]["code"], "malformed");
+}
+
+#[tokio::test]
+async fn certified_facet_is_visible_to_author_not_public() {
+    let app = test_app();
+    let created = json_body(publish_ramp(&app, "author-token", "Secret").await).await;
+    let id = created["facet"]["id"].as_str().unwrap().to_string();
+
+    // The author sees their own not-yet-published facet.
+    let resp = app
+        .clone()
+        .oneshot(get_with_token(&format!("/v1/facets/{id}"), "author-token"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(json_body(resp).await["facet"]["name"], "Secret");
+
+    // Anonymous -> 404 (its existence is not revealed).
+    let anon = Request::builder()
+        .uri(format!("/v1/facets/{id}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(anon).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // The public listing excludes it (Certified, not Published).
+    let list = Request::builder()
+        .uri("/v1/facets")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(list).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(json_body(resp).await["facets"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn get_wasm_returns_the_module_bytes() {
+    let app = test_app();
+    let created = json_body(publish_ramp(&app, "author-token", "Bytes").await).await;
+    let id = created["facet"]["id"].as_str().unwrap().to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(get_with_token(
+            &format!("/v1/facets/{id}/wasm"),
+            "author-token",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "application/wasm"
+    );
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(bytes.as_ref(), FACET_RAMP);
+}
+
+#[tokio::test]
+async fn get_unknown_facet_is_404() {
+    let app = test_app();
+    let resp = app
+        .clone()
+        .oneshot(get_with_token("/v1/facets/does-not-exist", "author-token"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }

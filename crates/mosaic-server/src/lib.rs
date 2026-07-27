@@ -20,15 +20,20 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
+use mosaic_registry::Store;
 use mosaic_runtime::Sandbox;
 
 mod auth;
 mod certify;
 pub mod error;
+mod facets;
 mod health;
 mod render;
 
 pub use auth::{AuthConfig, AuthedPrincipal, OptionalPrincipal, Principal, Role, TokenEntry};
+
+/// Maximum length (in characters) of a Facet's display name.
+const MAX_NAME_LEN: usize = 100;
 
 /// Maximum request body. An 8 MiB Facet base64-encodes to ~10.9 MiB, and raw-RGBA render
 /// inputs can be larger; 32 MiB is generous while still bounding per-request memory. Axum's
@@ -43,6 +48,8 @@ pub struct AppState {
     pub sandbox: Arc<Sandbox>,
     /// The bearer-token table (hashed) for authentication.
     pub auth: Arc<AuthConfig>,
+    /// The Facet registry backend.
+    pub registry: Arc<dyn Store>,
 }
 
 /// Build the application router from `state`. Separated from serving so tests can drive it
@@ -53,6 +60,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/whoami", get(whoami))
         .route("/v1/certify", post(certify::certify_handler))
         .route("/v1/render", post(render::render_handler))
+        .route("/v1/facets", get(facets::list).post(facets::publish))
+        .route("/v1/facets/{id}", get(facets::get_facet))
+        .route("/v1/facets/{id}/wasm", get(facets::get_wasm))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }

@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use mosaic_registry::{InMemoryStore, RedbStore, Store};
 use mosaic_runtime::Sandbox;
 use mosaic_server::{AppState, AuthConfig, app};
 
@@ -13,7 +14,27 @@ async fn main() -> anyhow::Result<()> {
     // repo). Absent it, no bearer token authenticates — read-only public endpoints still work.
     let auth = Arc::new(AuthConfig::from_env()?);
     eprintln!("mosaic-server: {} principal(s) configured", auth.len());
-    let router = app(AppState { sandbox, auth });
+
+    // Durable registry at MOSAIC_DB; without it, an in-memory store (data is not persisted)
+    // so a dev run works out of the box.
+    let registry: Arc<dyn Store> = match std::env::var("MOSAIC_DB") {
+        Ok(path) => {
+            eprintln!("mosaic-server: registry at {path}");
+            Arc::new(RedbStore::open(&path)?)
+        }
+        Err(_) => {
+            eprintln!(
+                "mosaic-server: MOSAIC_DB unset — using an in-memory registry (not persisted)"
+            );
+            Arc::new(InMemoryStore::new())
+        }
+    };
+
+    let router = app(AppState {
+        sandbox,
+        auth,
+        registry,
+    });
 
     // Bind address is configurable; default to loopback so nothing is exposed by accident.
     let addr = std::env::var("MOSAIC_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
