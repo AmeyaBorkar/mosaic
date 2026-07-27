@@ -612,7 +612,12 @@ pub mod render {
         let n = ramp.len();
         let l = if invert { 1.0 - luma } else { luma };
         let l = l.clamp(0.0, 1.0);
-        let idx = (l * (n as f32 - 1.0)).round() as usize;
+        // `+ 0.5) as usize`, not `.round()`: these differ for one f32 luma
+        // (0x3D638E38, where l*(n-1) is the exact tie 0.4999999702), and the
+        // sandboxed/browser facet-ramp uses this form — so `.round()` here broke the
+        // byte-identical native≡Facet contract at that value. Match every other ramp
+        // path in the tree (facet-ramp, tessera-spectral, the DSL). Audit M5.
+        let idx = (l * (n as f32 - 1.0) + 0.5) as usize;
         ramp[idx.min(n - 1)]
     }
 
@@ -661,6 +666,26 @@ pub mod render {
             }
         }
         Ok(out)
+    }
+
+    #[cfg(test)]
+    mod density_tests {
+        use super::density_glyph;
+
+        #[test]
+        fn matches_facet_ramp_at_the_f32_tie() {
+            // luma bits 0x3D638E38: l*(n-1) is the exact f32 tie 0.4999999702 for
+            // n=10, where the old `.round()` picked ' ' but the sandboxed facet-ramp's
+            // `+0.5` truncation picks '.'. They must now agree. Audit M5.
+            let ramp: Vec<char> = " .:-=+*#%@".chars().collect();
+            let luma = f32::from_bits(0x3D63_8E38);
+            let n = ramp.len();
+            let facet_idx = (luma * (n as f32 - 1.0) + 0.5) as usize;
+            assert_eq!(
+                density_glyph(luma, &ramp, false),
+                ramp[facet_idx.min(n - 1)]
+            );
+        }
     }
 }
 
