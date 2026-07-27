@@ -67,6 +67,12 @@ jobs:
       - name: Golden vectors are fresh
         run: bash scripts/verify-fixtures.sh
 
+      # The production artifact must compile in release, not only in the debug test build.
+      # The deployable container (see Dockerfile) is built by CD; this gate proves the
+      # release binary at every commit without paying for a full image build in CI.
+      - name: Release build (mosaic-server production binary)
+        run: cargo build --release --locked -p mosaic-server
+
   web:
     name: Web — facet-abi + mosaic-wasm (Node)
     runs-on: ubuntu-latest

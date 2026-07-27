@@ -1,0 +1,13 @@
+# Keep the build context small and the image reproducible: nothing here is needed to
+# build the server, and copying it would bust the cargo-chef cache or bloat the context.
+target/
+**/target/
+**/pkg/
+node_modules/
+.git/
+.github/
+.next/
+out/
+dist/
+*.tsbuildinfo
+.DS_Store

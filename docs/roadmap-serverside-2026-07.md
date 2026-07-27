@@ -205,4 +205,11 @@ P3  i) `mosaic-registry` crate: types + Store trait + in-memory + SQLite (bundle
   Mirrors the browser pipeline (`feature::extract*` → sandbox → `compose_codepoints`) with the
   same source, so it's bit-identical to preview. 4 more HTTP tests (ascii+spectral grids, 422
   non-conformant, 400 bad input). **Render endpoint (roadmap point 2) complete.**
-- (next) P2g — Dockerfile + CI release-build; then P3 registry.
+- **P2g done** — production `Dockerfile` (multi-stage, cargo-chef dependency caching,
+  non-root slim runtime) + `.dockerignore`; CI `rust` job gained a release-build gate
+  (`cargo build --release -p mosaic-server`) proving the production binary compiles every
+  commit; `crates/mosaic-server/README.md` documents the endpoints + run/deploy. (A full
+  in-CI `docker build` job was deliberately *not* added: no Docker daemon was available to
+  verify it locally, so gating on it would risk a red `main`; the image builds via
+  `docker build .` and is the CD artifact.) **Phase 2 (render endpoint + CD-ready) complete.**
+- (next) P3 — `mosaic-registry` crate (Store trait + SQLite) then server publish/list/moderate + auth.
