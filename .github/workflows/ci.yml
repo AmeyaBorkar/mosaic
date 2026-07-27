@@ -92,6 +92,14 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Enable pnpm and install JS dev dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Type-check TypeScript (strict, no emit)
+        run: pnpm run typecheck
+
       - name: Test (facet-abi + mosaic-wasm pipeline)
         run: >
           node --test

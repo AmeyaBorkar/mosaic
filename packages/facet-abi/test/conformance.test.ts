@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { compileFacet, runFacetMap } from "../src/index.ts";
 
-const here = (p) => fileURLToPath(new URL(p, import.meta.url));
+const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
 interface GoldenCase {
   name: string;

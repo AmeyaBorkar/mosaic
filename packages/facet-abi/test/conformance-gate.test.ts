@@ -14,8 +14,8 @@ import { checkMemoryLimits, checkTableLimits, compileFacet } from "../src/host.t
 const MAGIC = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]; // "\0asm" + version 1
 
 /** A minimal module: the 8-byte header followed by a raw section (id, size, body…). */
-function mod(...section: number[]): Uint8Array {
-  return Uint8Array.from([...MAGIC, ...section]);
+function mod(...section: number[]): Uint8Array<ArrayBuffer> {
+  return new Uint8Array([...MAGIC, ...section]);
 }
 
 // Memory section (id 5): [id, size, count, entries…]; entry = [flags, min, (max)?].

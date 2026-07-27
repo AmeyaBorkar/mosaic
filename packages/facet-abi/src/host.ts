@@ -248,15 +248,24 @@ export function validateFacetModule(module: WebAssembly.Module): void {
 
 /** Compile untrusted Facet bytes and validate them. Async: compilation is the
  *  one step browsers stream off the main thread. */
-export async function compileFacet(bytes: BufferSource): Promise<WebAssembly.Module> {
+export async function compileFacet(
+  source: Uint8Array | ArrayBuffer,
+): Promise<WebAssembly.Module> {
   // Reject an oversized module before handing it to the compiler, mirroring the native
   // MAX_MODULE_BYTES so the browser never spends seconds compiling (or previews) a
   // module the server rejects up front.
-  if (bytes.byteLength > MAX_MODULE_BYTES) {
+  if (source.byteLength > MAX_MODULE_BYTES) {
     throw new FacetAbiError(
-      `Facet module is ${bytes.byteLength} bytes, exceeding the ${MAX_MODULE_BYTES}-byte limit`,
+      `Facet module is ${source.byteLength} bytes, exceeding the ${MAX_MODULE_BYTES}-byte limit`,
     );
   }
+  // Take one owned snapshot, so WebAssembly.compile and the limit checks below read
+  // *identical* bytes even if `source` is a SharedArrayBuffer another thread mutates
+  // between them (audit L6), and so the bytes are a concrete ArrayBuffer.
+  const view = source instanceof ArrayBuffer ? new Uint8Array(source) : source;
+  const bytes = new Uint8Array(view.byteLength);
+  bytes.set(view);
+
   let module: WebAssembly.Module;
   try {
     module = await WebAssembly.compile(bytes);

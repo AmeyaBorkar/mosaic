@@ -19,7 +19,7 @@ import {
 } from "../src/index.ts";
 import { checkMemoryLimits } from "../src/host.ts";
 
-const here = (p) => fileURLToPath(new URL(p, import.meta.url));
+const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const rampWasm = readFileSync(here("./fixtures/facet_ramp.wasm"));
 const liarWasm = readFileSync(here("./fixtures/facet_liar.wasm"));
 

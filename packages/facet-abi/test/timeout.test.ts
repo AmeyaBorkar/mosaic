@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 
-const here = (p) => fileURLToPath(new URL(p, import.meta.url));
+const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const rampWasm = readFileSync(here("./fixtures/facet_ramp.wasm"));
 const spinWasm = readFileSync(here("./fixtures/facet_spin.wasm"));
 const ditherWasm = readFileSync(here("./fixtures/facet_dither.wasm"));
