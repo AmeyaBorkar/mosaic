@@ -52,3 +52,19 @@ test("accepts a single bounded memory within the cap", () => {
   // And a module with no memory section at all (nothing to reject) is fine here.
   assert.doesNotThrow(() => checkMemoryLimits(mod()));
 });
+
+test("rejects a 64-bit (memory64) memory (native disables memory64)", () => {
+  // count=1, flags=0x05 (has-max + is64 bit), min=1, max=1. wasmtime enables memory64
+  // by default via WASM3, so the browser must reject it or it previews what the server
+  // refuses.
+  const mem64 = mod(5, 4, 1, 0x05, 1, 1);
+  assert.throws(() => checkMemoryLimits(mem64), /64-bit|memory64/);
+});
+
+test("rejects an overflowing LEB128 maximum instead of truncating it", () => {
+  // max = LEB128 0x80 0x82 0x80 0x80 0x10 = 4_294_967_552 (> u32). The old 32-bit
+  // `<< 28` wrapped this to a small in-cap value; it must now be rejected.
+  // count=1, flags=0x01, min=1, then the 5-byte max (body = 8 bytes).
+  const overflow = mod(5, 8, 1, 0x01, 1, 0x80, 0x82, 0x80, 0x80, 0x10);
+  assert.throws(() => checkMemoryLimits(overflow), /exceeds u32|LEB128/);
+});

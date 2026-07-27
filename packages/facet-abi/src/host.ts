@@ -22,18 +22,29 @@ const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
  *  the browser analogue of the native StoreLimits memory cap. */
 const MAX_MEMORY_PAGES = 256;
 
-/** Read an unsigned LEB128 integer at `off`; returns `[value, nextOffset]`. */
+/** Read an unsigned LEB128 `u32` at `off`; returns `[value, nextOffset]`.
+ *
+ *  A wasm `u32` LEB128 is at most 5 bytes. An over-long or overflowing encoding is
+ *  *rejected*, never silently truncated: the previous `<< shift` (32-bit) form wrapped
+ *  `0x10 << 28` to 0, so a 64-bit memory's huge maximum parsed as a small in-cap value
+ *  and bypassed the memory cap. Accumulate with multiplication to stay exact for u32. */
 function readUleb(bytes: Uint8Array, off: number): [number, number] {
   let result = 0;
-  let shift = 0;
   let pos = off;
   for (let i = 0; i < 5; i++) {
-    const byte = bytes[pos++] ?? 0;
-    result |= (byte & 0x7f) << shift;
-    if ((byte & 0x80) === 0) break;
-    shift += 7;
+    if (pos >= bytes.length) {
+      throw new FacetAbiError("truncated LEB128 in Facet module");
+    }
+    const byte = bytes[pos++]!;
+    result += (byte & 0x7f) * 2 ** (7 * i);
+    if ((byte & 0x80) === 0) {
+      if (result > 0xffff_ffff) {
+        throw new FacetAbiError("LEB128 value exceeds u32 in Facet module");
+      }
+      return [result, pos];
+    }
   }
-  return [result >>> 0, pos];
+  throw new FacetAbiError("over-long LEB128 in Facet module (>5 bytes)");
 }
 
 /** Declared limits of each linear memory *defined* in the module (imported memory,
@@ -41,8 +52,13 @@ function readUleb(bytes: Uint8Array, off: number): [number, number] {
  *  `WebAssembly.Module` reflection exposes export kinds but not memory limits. */
 function readMemoryLimits(
   bytes: Uint8Array,
-): Array<{ min: number; max: number | undefined; shared: boolean }> {
-  const out: Array<{ min: number; max: number | undefined; shared: boolean }> = [];
+): Array<{ min: number; max: number | undefined; shared: boolean; is64: boolean }> {
+  const out: Array<{
+    min: number;
+    max: number | undefined;
+    shared: boolean;
+    is64: boolean;
+  }> = [];
   let off = 8; // skip the 8-byte magic + version (already validated by compile)
   while (off < bytes.length) {
     const id = bytes[off++] ?? 0;
@@ -63,7 +79,12 @@ function readMemoryLimits(
           p = afterMax;
           max = m;
         }
-        out.push({ min, max, shared: (flags & 0x02) !== 0 });
+        out.push({
+          min,
+          max,
+          shared: (flags & 0x02) !== 0,
+          is64: (flags & 0x04) !== 0,
+        });
       }
     }
     off = sectionEnd;
@@ -95,6 +116,12 @@ export function checkMemoryLimits(bytes: BufferSource): void {
   for (const mem of memories) {
     if (mem.shared) {
       throw new FacetAbiError("Facet memory must not be shared");
+    }
+    // The native sandbox disables memory64 (wasmtime enables it by default via WASM3),
+    // and a 64-bit memory's limits do not fit the u32 parse above, so reject it here to
+    // keep the browser from previewing a Facet the server refuses.
+    if (mem.is64) {
+      throw new FacetAbiError("Facet memory must not be a 64-bit (memory64) memory");
     }
     if (mem.max === undefined) {
       throw new FacetAbiError("Facet memory must declare a bounded maximum");
