@@ -159,6 +159,7 @@ impl std::error::Error for Rejection {}
 /// The conformance envelope, as concrete values. Embedded in a [`Certificate`] so the
 /// server and the browser agree on the bounds by value, not by coincidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Profile {
     /// See [`MAX_MODULE_BYTES`].
     pub max_module_bytes: usize,

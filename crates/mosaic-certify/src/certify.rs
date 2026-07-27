@@ -51,6 +51,7 @@ pub enum ProbeOutcome {
 /// One golden probe: a deterministic feature buffer of `cols * rows` cells (each `stride`
 /// little-endian `f32`s) and the [`ProbeOutcome`] the authoritative host produced for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Probe {
     /// A stable, human-readable label (e.g. `gather_stride3`).
     pub name: String,
@@ -70,6 +71,7 @@ pub struct Probe {
 /// bound to the exact module bytes by [`wasm_sha256`](Self::wasm_sha256). The registry
 /// stores it; the browser replays [`probes`](Self::probes) to check `preview == render`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Certificate {
     /// The certificate schema version ([`CERTIFY_VERSION`]).
     pub certify_version: u32,
