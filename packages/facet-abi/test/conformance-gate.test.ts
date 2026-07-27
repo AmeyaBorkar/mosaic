@@ -97,3 +97,14 @@ test("rejects a module larger than the 8 MiB cap before compiling", async () => 
   oversized.set([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
   await assert.rejects(() => compileFacet(oversized), /exceeding the .* limit/);
 });
+
+test("finds an over-cap memory section behind a preceding custom section", () => {
+  // Non-vacuous: a broken section walk that assumed the memory section sits right after
+  // the header would read the *custom* section as memory and miss this. The parser must
+  // skip the custom section (id 0, size 3: name "ab") to reach the over-cap memory
+  // section (max=300 > 256). Audit M13.
+  const custom = [0, 3, 2, 0x61, 0x62]; // id 0, size 3, namelen 2, 'a','b'
+  const overCapMem = [5, 5, 1, 0x01, 1, 0xac, 0x02]; // max=300 (LEB 0xAC 0x02)
+  const withCustom = mod(...custom, ...overCapMem);
+  assert.throws(() => checkMemoryLimits(withCustom), /cap/);
+});
