@@ -44,9 +44,16 @@ use wasmtime::{Config, Engine, Instance, Module, Store, StoreLimits, StoreLimits
 /// (funcref tables are 8 bytes/element) while still allowing normal indirect calls.
 const MAX_TABLE_ELEMENTS: usize = 10_000;
 
-/// Maximum accepted Facet module size (WASM or WAT bytes) — bounds untrusted
-/// compilation cost before Cranelift ever sees the module.
+/// Maximum accepted Facet module size (WASM or WAT bytes).
 const MAX_MODULE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum functions a Facet may define, and the maximum size of any one function
+/// body. A byte cap alone is not a compile-cost cap — a single 8 MiB `br_table`
+/// function drives superlinear Cranelift work — so a cheap structural pre-pass bounds
+/// the two quantities that matter before `Module::new` compiles anything. Both are far
+/// beyond any real Facet (the shipped ones have a handful of tiny functions).
+const MAX_FUNCTIONS: usize = 4096;
+const MAX_FUNCTION_BODY_BYTES: usize = 256 * 1024;
 
 /// Ticker granularity for the epoch clock: a background thread advances the
 /// engine epoch once per interval, and each execution's wall-clock deadline is
@@ -166,6 +173,7 @@ impl Sandbox {
                 bytes.len()
             ));
         }
+        precheck_compile_cost(bytes)?;
         let module = Module::new(&self.engine, bytes)?;
         Ok(Facet { module })
     }
@@ -455,6 +463,37 @@ fn checked_wasm_len(count: usize, elem_size: usize) -> Result<usize> {
         ));
     }
     Ok(bytes)
+}
+
+/// A cheap structural walk over untrusted module bytes that bounds Cranelift's
+/// compilation cost before `Module::new` runs: it rejects a module with too many
+/// functions or an over-large single function body (the pathological `br_table` case).
+/// It does not validate the module — that is `Module::new`'s job — it only counts.
+fn precheck_compile_cost(bytes: &[u8]) -> Result<()> {
+    use wasmparser::{Parser, Payload};
+    // Untrusted Facets are always binary modules (the registry and browser deal in
+    // .wasm); WAT text is a trusted test/dev convenience that Module::new converts, so
+    // only the binary form is walked here. A binary module starts with "\0asm".
+    if !bytes.starts_with(b"\0asm") {
+        return Ok(());
+    }
+    let mut n_funcs = 0usize;
+    for payload in Parser::new(0).parse_all(bytes) {
+        if let Payload::CodeSectionEntry(body) = payload? {
+            n_funcs += 1;
+            if n_funcs > MAX_FUNCTIONS {
+                return Err(anyhow!("Facet defines more than {MAX_FUNCTIONS} functions"));
+            }
+            let range = body.range();
+            let len = range.end - range.start;
+            if len > MAX_FUNCTION_BODY_BYTES {
+                return Err(anyhow!(
+                    "a Facet function body is {len} bytes, exceeding the {MAX_FUNCTION_BODY_BYTES}-byte limit"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A compiled Facet module, ready to instantiate and run in a [`Sandbox`].
@@ -851,6 +890,24 @@ mod tests {
         assert!(
             sb.compile(MEMORY64_WAT).is_err(),
             "a 64-bit linear memory must be rejected (wasm_memory64 disabled)"
+        );
+    }
+
+    #[test]
+    fn too_many_functions_is_rejected_pre_compile() {
+        // A binary module with more than MAX_FUNCTIONS functions must be rejected by the
+        // structural pre-pass before Cranelift compiles it (audit M9). Built as binary
+        // wasm so the pre-pass (which only walks binary modules) actually runs.
+        let sb = Sandbox::new().unwrap();
+        let mut wat = String::from("(module");
+        for _ in 0..(MAX_FUNCTIONS + 1) {
+            wat.push_str("(func)");
+        }
+        wat.push(')');
+        let wasm = wat::parse_str(&wat).expect("assemble wat");
+        assert!(
+            sb.compile(&wasm).is_err(),
+            "a module exceeding MAX_FUNCTIONS must be rejected before compilation"
         );
     }
 

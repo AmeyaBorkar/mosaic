@@ -743,7 +743,9 @@ dependencies = [
  "bytemuck",
  "mosaic-dsl",
  "mosaic-vm",
+ "wasmparser 0.252.0",
  "wasmtime",
+ "wat",
 ]
 
 [[package]]
