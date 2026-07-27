@@ -88,4 +88,8 @@ C1 certify program · C2 registry+server program-kind. Docs sweep at the end.
   controls (applyParams). It doubles as the UI's reference. 11 wasm node tests green.
   **Phase A (browser authoring + controls loop) complete** — a UI can author, preview, and
   tweak entirely in-browser, provably identical to the server.
-- (next) B1 — colour engine (per-cell mean RGB + colour-aware composition).
+- **B1 done** — `tessera_ascii::color`: `ImageRef::rgba` accessor + `render_halfblock`
+  (coloured pixel art: each cell `▀` with top-half fg / bottom-half bg mean colour, 2× vertical
+  resolution, no Facet) + `extract_cell_colors` (per-cell mean, to tint glyph art). Deterministic
+  integer means → `preview == render` for colour. Cell-budget guarded. 2 tests; builds to wasm32.
+- (next) B2 — expose colour via `mosaic-wasm`; B3 — `/v1/render` colour modes.

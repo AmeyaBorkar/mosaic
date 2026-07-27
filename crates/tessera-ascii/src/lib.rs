@@ -246,6 +246,167 @@ pub mod image {
             let b = self.rgba[idx + 2] as f32 / 255.0;
             0.2126 * r + 0.7152 * g + 0.0722 * b
         }
+
+        /// The raw 8-bit RGBA of the pixel at `(x, y)` — the source colour, for a coloured
+        /// render (see [`crate::color`]). Callers must keep `x < width`, `y < height`.
+        pub fn rgba(&self, x: u32, y: u32) -> [u8; 4] {
+            let idx = ((y as usize * self.width as usize) + x as usize) * 4;
+            [
+                self.rgba[idx],
+                self.rgba[idx + 1],
+                self.rgba[idx + 2],
+                self.rgba[idx + 3],
+            ]
+        }
+    }
+}
+
+/// Colour output: pair the source image's colour with the glyph grid.
+///
+/// Colour is computed by the engine from the image, never by the (untrusted) Facet — it is a
+/// deterministic integer mean of the source pixels, so a coloured render is bit-identical
+/// native vs wasm (`preview == render`). Two modes:
+///
+/// - **half-block** ([`render_halfblock`]) — each cell is `▀` (U+2580) with foreground = the
+///   mean colour of its top pixel-half and background = its bottom half, doubling vertical
+///   resolution: true coloured "pixel art", no Facet involved.
+/// - **glyph colour** ([`extract_cell_colors`]) — one mean colour per cell, to tint the
+///   glyphs a Facet chose (colourise ASCII art).
+///
+/// Colours are packed RGBA in a `u32`, little-endian: `r | g<<8 | b<<16 | a<<24` (byte 0 is
+/// red), the layout a canvas `ImageData` uses.
+pub mod color {
+    use super::error::Error;
+    use super::grid::Grid;
+    use super::image::ImageRef;
+
+    /// The half-block glyph (`▀`, U+2580) every [`render_halfblock`] cell uses.
+    pub const HALF_BLOCK: u32 = 0x2580;
+
+    /// A coloured half-block render: `cols × rows` cells, each drawn as [`HALF_BLOCK`] with
+    /// `fg[i]` over `bg[i]` (packed RGBA). Effective pixel resolution is `cols × 2·rows`.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct HalfBlock {
+        pub cols: u32,
+        pub rows: u32,
+        /// Top-half mean colour per cell (the glyph foreground).
+        pub fg: Vec<u32>,
+        /// Bottom-half mean colour per cell (the glyph background).
+        pub bg: Vec<u32>,
+    }
+
+    fn pack_rgba(r: u32, g: u32, b: u32, a: u32) -> u32 {
+        r | (g << 8) | (b << 16) | (a << 24)
+    }
+
+    /// Deterministic integer mean colour of the pixels in `[x0, x1) × [y0, y1)`, packed RGBA.
+    /// An empty range yields transparent black (`0`).
+    fn mean_color(image: &ImageRef, x0: u32, x1: u32, y0: u32, y1: u32) -> u32 {
+        let (mut r, mut g, mut b, mut a, mut n) = (0u64, 0u64, 0u64, 0u64, 0u64);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let [pr, pg, pb, pa] = image.rgba(x, y);
+                r += u64::from(pr);
+                g += u64::from(pg);
+                b += u64::from(pb);
+                a += u64::from(pa);
+                n += 1;
+            }
+        }
+        if n == 0 {
+            return 0;
+        }
+        pack_rgba(
+            (r / n) as u32,
+            (g / n) as u32,
+            (b / n) as u32,
+            (a / n) as u32,
+        )
+    }
+
+    fn cell_count(grid: &Grid) -> Result<usize, Error> {
+        let ncells = (grid.cols() as usize)
+            .checked_mul(grid.rows() as usize)
+            .ok_or(Error::DimensionOverflow)?;
+        if ncells > crate::MAX_CELLS {
+            return Err(Error::TooManyCells {
+                cells: ncells,
+                max: crate::MAX_CELLS,
+            });
+        }
+        Ok(ncells)
+    }
+
+    /// Render `image` as coloured half-blocks over `grid`: each cell is `▀` with its top and
+    /// bottom pixel-halves' mean colours. This is the coloured-pixel-art path — no Facet.
+    pub fn render_halfblock(image: &ImageRef, grid: &Grid) -> Result<HalfBlock, Error> {
+        cell_count(grid)?;
+        let (cols, rows) = (grid.cols(), grid.rows());
+        let mut fg = Vec::with_capacity(cols as usize * rows as usize);
+        let mut bg = Vec::with_capacity(cols as usize * rows as usize);
+        for row in 0..rows {
+            for col in 0..cols {
+                let (x0, x1, y0, y1) = grid.cell_bounds(col, row);
+                if y1 - y0 <= 1 {
+                    // A one-pixel-tall cell: both halves are that pixel row.
+                    let c = mean_color(image, x0, x1, y0, y1);
+                    fg.push(c);
+                    bg.push(c);
+                } else {
+                    let ymid = y0 + (y1 - y0) / 2;
+                    fg.push(mean_color(image, x0, x1, y0, ymid));
+                    bg.push(mean_color(image, x0, x1, ymid, y1));
+                }
+            }
+        }
+        Ok(HalfBlock { cols, rows, fg, bg })
+    }
+
+    /// One mean colour per cell (`cols × rows`, row-major, packed RGBA) — to tint the glyphs a
+    /// Facet produced (colourise its ASCII art).
+    pub fn extract_cell_colors(image: &ImageRef, grid: &Grid) -> Result<Vec<u32>, Error> {
+        cell_count(grid)?;
+        let mut out = Vec::with_capacity(grid.cols() as usize * grid.rows() as usize);
+        for row in 0..grid.rows() {
+            for col in 0..grid.cols() {
+                let (x0, x1, y0, y1) = grid.cell_bounds(col, row);
+                out.push(mean_color(image, x0, x1, y0, y1));
+            }
+        }
+        Ok(out)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn halfblock_splits_top_and_bottom() {
+            // 2×2: top row red, bottom row blue. One cell (cell_aspect 1.0 -> rows 1).
+            let rgba = [
+                255, 0, 0, 255, 255, 0, 0, 255, // y=0
+                0, 0, 255, 255, 0, 0, 255, 255, // y=1
+            ];
+            let image = ImageRef::new(2, 2, &rgba).unwrap();
+            let grid = Grid::new(2, 2, 1, 1.0);
+            let hb = render_halfblock(&image, &grid).unwrap();
+            assert_eq!((hb.cols, hb.rows), (1, 1));
+            assert_eq!(hb.fg, vec![pack_rgba(255, 0, 0, 255)]); // top half: red
+            assert_eq!(hb.bg, vec![pack_rgba(0, 0, 255, 255)]); // bottom half: blue
+        }
+
+        #[test]
+        fn cell_colors_are_the_integer_mean() {
+            let rgba = [
+                255, 0, 0, 255, 255, 0, 0, 255, // red
+                0, 0, 255, 255, 0, 0, 255, 255, // blue
+            ];
+            let image = ImageRef::new(2, 2, &rgba).unwrap();
+            let grid = Grid::new(2, 2, 1, 1.0);
+            let colors = extract_cell_colors(&image, &grid).unwrap();
+            // mean of two red + two blue: r=127, g=0, b=127, a=255 (integer division).
+            assert_eq!(colors, vec![pack_rgba(127, 0, 127, 255)]);
+        }
     }
 }
 
