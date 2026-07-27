@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # Rust dependencies for the workspace (the Facet crates carry their own locks but
+  # depend almost entirely on path crates + libm, which this graph already covers).
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+  # Keep the CI actions themselves patched.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

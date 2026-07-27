@@ -102,3 +102,24 @@ jobs:
           crates/mosaic-wasm/test/pipeline.test.ts
           crates/mosaic-wasm/test/spectral.test.ts
           crates/mosaic-wasm/test/composite.test.ts
+
+  audit:
+    name: Security — cargo audit (RUSTSEC advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installs the pinned toolchain from rust-toolchain.toml.
+      - name: Install Rust
+        run: rustup show
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies for known advisories
+        run: cargo audit
