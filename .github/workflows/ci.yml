@@ -10,10 +10,12 @@ on:
 permissions:
   contents: read
 
-# One in-flight run per ref; newer pushes cancel older, still-running ones.
+# One in-flight run per ref. Cancel superseded runs on PR branches only — never on
+# `main`, where every commit must be independently verified (bisectability), so a
+# rapid second push cannot cancel the first commit's run before it reports.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -39,13 +41,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (deny warnings)
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Test (workspace)
-        run: cargo test --workspace --all-features
+        run: cargo test --locked --workspace --all-features
 
       - name: Engine + bridge + VM compile to wasm32 (browser / Facet target)
-        run: cargo build -p glyph-atlas -p tessera-ascii -p mosaic-vm -p mosaic-wasm --target wasm32-unknown-unknown
+        run: cargo build --locked -p glyph-atlas -p tessera-ascii -p mosaic-vm -p mosaic-wasm --target wasm32-unknown-unknown
 
       - name: Golden vectors are fresh
         run: bash scripts/verify-fixtures.sh
