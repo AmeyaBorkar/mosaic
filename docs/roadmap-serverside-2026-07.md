@@ -188,9 +188,13 @@ P3  i) `mosaic-registry` crate: types + Store trait + in-memory + SQLite (bundle
 
 ## Progress log
 
-- **P1a done** — `mosaic-certify` crate: `check_profile(bytes) -> Result<AbiKind, Rejection>`,
-  the browser-parity static gate in Rust (zero imports; one bounded/non-shared/32-bit memory
-  within the page cap; ≤1 32-bit table within the element cap; required exports; single entry
-  point). `Profile`/`AbiKind`/`RejectionCode`/`Rejection` types (serde). 20 accept/reject tests.
-  Added to the workspace. fmt/clippy/test green.
-- (next) P1b — certificate + probes + `certify()` execution layer.
+- **P1a done** (c204f7c) — `mosaic-certify`: `check_profile` static gate + `Profile`/`AbiKind`/
+  `RejectionCode`/`Rejection`. 20 accept/reject tests. CI green.
+- **P1b done** (7cbc803) — certificate + golden probes + `certify(sandbox, bytes) -> CertifyOutcome`
+  execution layer. `ProbeOutcome = Tokens|Trapped`. 7 tests over real facet_ramp/facet_dither.
+- **P1c done** — `emit_cert_golden` example + committed `cert_golden.json` + `verify-fixtures.sh`
+  wiring; certificate JSON is camelCase; golden re-emits byte-identically.
+- **P1d done** — `facet-abi verifyCertificate(bytes, cert)`: replays probes on the browser host,
+  checks hash binding + every outcome. `cert.test.ts` (5 tests, gather+propagation) added to
+  `package.json` + CI web job. Typecheck + tests green. **Phase 1 (conformance gate) complete.**
+- (next) P2 — `mosaic-server` skeleton: `app()`, `/healthz`, error envelope, bin; workspace + CI.
