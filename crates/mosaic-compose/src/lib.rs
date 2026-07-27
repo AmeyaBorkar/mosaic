@@ -34,6 +34,7 @@ pub const MAX_LAYERS: usize = 256;
 /// A declarative composition: a canvas and an ordered stack of layers (painter's order,
 /// first drawn first / bottom-most). Serializes to JSON as the shareable artifact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Composition {
     pub canvas: CanvasSpec,
     /// Codepoint painted where no layer is opaque (e.g. `32` for space).
@@ -43,6 +44,7 @@ pub struct Composition {
 
 /// Output grid size of the composed artifact, in character cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CanvasSpec {
     pub cols: u32,
     pub rows: u32,
@@ -51,6 +53,7 @@ pub struct CanvasSpec {
 /// One layer in the stack: what produces it, where it sits, how it blends, and how its
 /// coverage (transparency) is derived.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LayerDecl {
     pub source: LayerSource,
     #[serde(default)]
@@ -64,6 +67,7 @@ pub struct LayerDecl {
 /// Facet's parameters. The host [`LayerResolver`] interprets these; the schema stays
 /// engine-agnostic.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LayerSource {
     /// Engine name, e.g. `"ascii"`, `"spectral"`.
     pub engine: String,
@@ -79,6 +83,7 @@ pub struct LayerSource {
 /// Top-left placement of a layer on the canvas (may be negative or off-canvas; the
 /// compositor clips).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Placement {
     #[serde(default)]
     pub row: i32,
@@ -211,6 +216,19 @@ pub fn render(comp: &Composition, resolver: &mut dyn LayerResolver) -> Result<St
             coverage,
         } = resolver.resolve(&decl.source)?;
         let n = (cols as usize).saturating_mul(rows as usize);
+        // Validate the resolver's grid against its own token count *before* allocating
+        // coverage from `n`: otherwise a resolver reporting huge dims with few tokens
+        // would drive a multi-GB `vec![1.0; n]` before the mismatch is caught. Audit L3.
+        if tokens.len() != n {
+            return Err(RenderError::Compose(
+                mosaic_core::composite::Error::LayerSizeMismatch {
+                    cols,
+                    rows,
+                    tokens: tokens.len(),
+                    coverage: n,
+                },
+            ));
+        }
         let cov = match &decl.coverage {
             CoverageMode::Opaque => vec![1.0; n],
             CoverageMode::KeyedOn { token } => tokens
@@ -225,7 +243,12 @@ pub fn render(comp: &Composition, resolver: &mut dyn LayerResolver) -> Result<St
                         got: c.len(),
                     });
                 }
-                c
+                // Clamp resolver-supplied coverage into [0,1], mapping NaN to 0
+                // (transparent). An unclamped NaN is neither opaque (>= 0.5) nor
+                // fillable by Blend::Under (< 0.5), leaving a permanent hole. Audit L2.
+                c.iter()
+                    .map(|&v| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) })
+                    .collect()
             }
         };
         let layer = Layer::with_coverage(cols, rows, tokens, cov).map_err(RenderError::Compose)?;
@@ -260,6 +283,14 @@ mod tests {
                     cols: 3,
                     rows: 1,
                     tokens: vec![B, SP, B],
+                    coverage: None,
+                }),
+                // Huge declared dims but a single token — exercises the pre-alloc size
+                // guard (audit L3) without a real multi-GB allocation.
+                "bad_dims" => Ok(ResolvedLayer {
+                    cols: 65535,
+                    rows: 65535,
+                    tokens: vec![A],
                     coverage: None,
                 }),
                 other => Err(RenderError::Resolve(format!("unknown facet {other:?}"))),
@@ -382,6 +413,28 @@ mod tests {
         assert!(matches!(
             render(&comp, &mut MockResolver),
             Err(RenderError::Resolve(_))
+        ));
+    }
+
+    #[test]
+    fn unknown_json_field_is_rejected() {
+        // A typo'd key must not be silently dropped from a shareable artifact. Audit L2.
+        let json = r#"{"canvas":{"cols":1,"rows":1},"background":32,"layers":[{"source":{"engine":"m","facet":"f","input":"i"},"blend":"over","coverge":"opaque"}]}"#;
+        assert!(Composition::from_json(json).is_err());
+    }
+
+    #[test]
+    fn mismatched_resolver_dims_error_before_allocating() {
+        // Resolver reports a 65535x65535 grid but one token: the size guard must reject
+        // it (never allocate ~17 GB of coverage from the declared dims). Audit L3.
+        let comp = Composition {
+            canvas: CanvasSpec { cols: 1, rows: 1 },
+            background: SP,
+            layers: vec![layer("bad_dims", BlendSpec::Over, CoverageMode::Opaque)],
+        };
+        assert!(matches!(
+            render(&comp, &mut MockResolver),
+            Err(RenderError::Compose(_))
         ));
     }
 
