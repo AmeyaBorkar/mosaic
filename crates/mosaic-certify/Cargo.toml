@@ -1,0 +1,19 @@
+[package]
+name = "mosaic-certify"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Mosaic's authoritative conformance gate: admit a Facet only if it fits the profile, and certify it with golden (features -> tokens) vectors from the proven native host."
+publish = false
+
+[dependencies]
+# Typed structural inspection of untrusted module bytes (imports, memory/table limits,
+# exports, function bodies) for the static profile gate. Pinned to the version wasmtime 47
+# already uses (via mosaic-runtime), so no extra crate enters the graph.
+wasmparser = "0.252"
+# The certificate and rejection are serialized by the server (JSON) and the golden emitter.
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# Assemble binary wasm from WAT in the profile-fixture tests (accept/reject battery).
+wat = "1"

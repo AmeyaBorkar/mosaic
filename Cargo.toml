@@ -10,6 +10,7 @@ members = [
     "crates/tessera-ascii",
     "crates/tessera-spectral",
     "crates/mosaic-runtime",
+    "crates/mosaic-certify",
     "crates/mosaic-wasm",
     "crates/mosaic-compose",
     "crates/mosaic-vm",

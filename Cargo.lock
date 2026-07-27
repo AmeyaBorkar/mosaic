@@ -712,6 +712,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mosaic-certify"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "wasmparser 0.252.0",
+ "wat",
+]
+
+[[package]]
 name = "mosaic-compose"
 version = "0.0.0"
 dependencies = [
