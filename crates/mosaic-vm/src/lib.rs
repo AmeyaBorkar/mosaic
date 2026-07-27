@@ -210,9 +210,14 @@ pub fn validate(bytes: &[u8]) -> Result<Program<'_>, VmError> {
         off += 2;
         *slot = off;
         table_len[t] = len;
-        // Validate every entry is a real codepoint (so f32 round-trips it losslessly).
+        // Validate every entry is a real Unicode scalar value: <= MAX_CODEPOINT and not
+        // a UTF-16 surrogate (D800..=DFFF). Surrogates are <= 0x10FFFF but are not
+        // scalars, so `char::from_u32` would map them to U+FFFD downstream; rejecting
+        // them here keeps the validator's contract honest (audit L4). f32 still
+        // round-trips every accepted value losslessly (all < 2^24).
         for i in 0..len {
-            if read_u32(bytes, off + i * 4)? > MAX_CODEPOINT {
+            let cp = read_u32(bytes, off + i * 4)?;
+            if cp > MAX_CODEPOINT || (0xD800..=0xDFFF).contains(&cp) {
                 return Err(VmError::BadCodepoint);
             }
         }
@@ -728,6 +733,15 @@ mod tests {
     fn rejects_bad_codepoint_in_table() {
         let mut a = Asm::new(1);
         let _ = a.table(&[0x11_0000]); // above MAX_CODEPOINT
+        a.loadf(0).table_op(0);
+        assert_eq!(validate(&a.finish()).unwrap_err(), VmError::BadCodepoint);
+    }
+
+    #[test]
+    fn rejects_surrogate_in_table() {
+        // U+D800 is <= MAX_CODEPOINT but is a UTF-16 surrogate, not a scalar value (L4).
+        let mut a = Asm::new(1);
+        let _ = a.table(&[0xD800]);
         a.loadf(0).table_op(0);
         assert_eq!(validate(&a.finish()).unwrap_err(), VmError::BadCodepoint);
     }
