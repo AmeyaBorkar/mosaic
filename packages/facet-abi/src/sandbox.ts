@@ -39,14 +39,11 @@ interface WorkerResult {
  * `FacetTimeoutError` if it overruns `timeoutMs`, or `FacetAbiError` on any ABI
  * violation or trap.
  */
-export function runFacetSandboxed(
-  facetBytes: Uint8Array,
-  features: Float32Array,
-  ncells: number,
-  stride: number,
-  options?: SandboxOptions,
+function runInWorker(
+  message: Record<string, unknown>,
+  transfer: Transferable[],
+  timeoutMs: number,
 ): Promise<Uint32Array> {
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   return new Promise<Uint32Array>((resolve, reject) => {
     const worker = new Worker(new URL("./worker.ts", import.meta.url), {
       type: "module",
@@ -74,11 +71,48 @@ export function runFacetSandboxed(
     worker.onerror = (ev: ErrorEvent) => {
       settle(() => reject(new FacetAbiError(ev.message)));
     };
-    // Copy the features so the transfer doesn't detach the caller's array.
-    const owned = features.slice();
-    worker.postMessage(
-      { facetBytes, features: owned.buffer, ncells, stride },
-      [owned.buffer],
-    );
+    worker.postMessage(message, transfer);
   });
+}
+
+/** Run a **gather** (`run`) Facet in a sandboxed Worker under a wall-clock timeout. */
+export function runFacetSandboxed(
+  facetBytes: Uint8Array,
+  features: Float32Array,
+  ncells: number,
+  stride: number,
+  options?: SandboxOptions,
+): Promise<Uint32Array> {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  // Copy the features so the transfer doesn't detach the caller's array.
+  const owned = features.slice();
+  return runInWorker(
+    { kind: "map", facetBytes, features: owned.buffer, ncells, stride },
+    [owned.buffer],
+    timeoutMs,
+  );
+}
+
+/**
+ * Run a **propagation** (`run2d`) Facet in a sandboxed Worker under a wall-clock
+ * timeout. The 2-D ABI (D10) now gets the same Worker+terminate containment as the
+ * gather ABI, so an infinite-loop propagation Facet can no longer freeze the tab (it
+ * previously had only the synchronous, unpreemptable `runFacetMap2d` on the caller's
+ * thread). Audit M3.
+ */
+export function runFacetSandboxed2d(
+  facetBytes: Uint8Array,
+  features: Float32Array,
+  cols: number,
+  rows: number,
+  stride: number,
+  options?: SandboxOptions,
+): Promise<Uint32Array> {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const owned = features.slice();
+  return runInWorker(
+    { kind: "map2d", facetBytes, features: owned.buffer, cols, rows, stride },
+    [owned.buffer],
+    timeoutMs,
+  );
 }

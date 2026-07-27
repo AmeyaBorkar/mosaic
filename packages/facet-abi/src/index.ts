@@ -13,5 +13,5 @@ export {
   runFacetMap,
   runFacetMap2d,
 } from "./host.ts";
-export { runFacetSandboxed, FacetTimeoutError } from "./sandbox.ts";
+export { runFacetSandboxed, runFacetSandboxed2d, FacetTimeoutError } from "./sandbox.ts";
 export type { SandboxOptions } from "./sandbox.ts";

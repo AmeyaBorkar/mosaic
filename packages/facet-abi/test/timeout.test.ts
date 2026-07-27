@@ -14,6 +14,7 @@ import { Worker } from "node:worker_threads";
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const rampWasm = readFileSync(here("./fixtures/facet_ramp.wasm"));
 const spinWasm = readFileSync(here("./fixtures/facet_spin.wasm"));
+const ditherWasm = readFileSync(here("./fixtures/facet_dither.wasm"));
 
 interface GoldenCase {
   name: string;
@@ -34,11 +35,8 @@ interface Outcome {
 
 /** Run a Facet in a worker under a timeout, terminating it on overrun. Mirrors
  *  sandbox.ts's policy; the only difference from the browser is Worker impl. */
-function runSandboxedNode(
-  facetBytes: Uint8Array,
-  features: number[],
-  ncells: number,
-  stride: number,
+function runInNodeWorker(
+  message: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<number[]> {
   return new Promise((resolve, reject) => {
@@ -60,8 +58,35 @@ function runSandboxedNode(
       else settle(() => reject(new Error(msg.error ?? "unknown error")));
     });
     worker.on("error", (e) => settle(() => reject(e)));
-    worker.postMessage({ facetBytes, features, ncells, stride });
+    worker.postMessage(message);
   });
+}
+
+function runSandboxedNode(
+  facetBytes: Uint8Array,
+  features: number[],
+  ncells: number,
+  stride: number,
+  timeoutMs: number,
+): Promise<number[]> {
+  return runInNodeWorker(
+    { kind: "map", facetBytes, features, ncells, stride },
+    timeoutMs,
+  );
+}
+
+function runSandboxed2dNode(
+  facetBytes: Uint8Array,
+  features: number[],
+  cols: number,
+  rows: number,
+  stride: number,
+  timeoutMs: number,
+): Promise<number[]> {
+  return runInNodeWorker(
+    { kind: "map2d", facetBytes, features, cols, rows, stride },
+    timeoutMs,
+  );
 }
 
 test("an untrusted infinite-loop Facet is forcibly terminated by the timeout", async () => {
@@ -77,4 +102,16 @@ test("a well-behaved Facet completes in the worker with the correct tokens", asy
   const c = golden.cases[0]!;
   const tokens = await runSandboxedNode(rampWasm, c.features, c.ncells, c.stride, 5000);
   assert.deepEqual(tokens, c.tokens);
+});
+
+test("a propagation (run2d) Facet runs in the worker under the same timeout", async () => {
+  // facet_dither is a well-behaved run2d (propagation) Facet. Before M3 the 2-D ABI had
+  // no Worker path at all; it must now compile and run off-thread and return one token
+  // per cell — the same containment the gather ABI has.
+  const cols = 2;
+  const rows = 2;
+  const stride = 1;
+  const features = [0.1, 0.9, 0.5, 0.3];
+  const tokens = await runSandboxed2dNode(ditherWasm, features, cols, rows, stride, 5000);
+  assert.equal(tokens.length, cols * rows);
 });
