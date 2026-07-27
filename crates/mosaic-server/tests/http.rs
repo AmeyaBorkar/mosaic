@@ -467,3 +467,46 @@ async fn moderator_queue_is_gated_and_reject_works() {
     let resp = moderate(&app, &id, "reject", "mod-token").await;
     assert_eq!(json_body(resp).await["facet"]["state"], "rejected");
 }
+
+#[tokio::test]
+async fn render_halfblock_returns_colored_cells() {
+    let (w, h) = (4u32, 4u32);
+    let rgba = vec![128u8; (w * h * 4) as usize];
+    let body = serde_json::json!({
+        "engine": "halfblock",
+        "input": { "rgba": STANDARD.encode(&rgba), "width": w, "height": h },
+        "params": { "cols": 4, "cellAspect": 1.0 }
+    });
+    let resp = test_app()
+        .oneshot(post_json("/v1/render", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let out = json_body(resp).await;
+    assert_eq!(out["glyph"], 0x2580); // ▀
+    let n = (out["cols"].as_u64().unwrap() * out["rows"].as_u64().unwrap()) as usize;
+    assert_eq!(out["fg"].as_array().unwrap().len(), n);
+    assert_eq!(out["bg"].as_array().unwrap().len(), n);
+    assert!(out["text"].is_null()); // no glyph text for the half-block engine
+}
+
+#[tokio::test]
+async fn render_ascii_with_color_adds_per_cell_colors() {
+    let (w, h) = (8u32, 8u32);
+    let rgba = vec![200u8; (w * h * 4) as usize];
+    let body = serde_json::json!({
+        "engine": "ascii",
+        "facet": { "inline": STANDARD.encode(FACET_RAMP) },
+        "input": { "rgba": STANDARD.encode(&rgba), "width": w, "height": h },
+        "params": { "cols": 8, "cellAspect": 1.0, "color": true }
+    });
+    let resp = test_app()
+        .oneshot(post_json("/v1/render", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let out = json_body(resp).await;
+    assert!(out["text"].is_string());
+    let n = (out["cols"].as_u64().unwrap() * out["rows"].as_u64().unwrap()) as usize;
+    assert_eq!(out["colors"].as_array().unwrap().len(), n);
+}

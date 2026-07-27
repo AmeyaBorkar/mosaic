@@ -53,6 +53,13 @@ pub enum RenderRequest {
         input: PcmInput,
         params: SpectralParams,
     },
+    /// Image → coloured half-block pixel art (no Facet): each cell is `▀` with its top and
+    /// bottom pixel-halves' mean colours.
+    Halfblock {
+        input: ImageInput,
+        #[serde(default)]
+        params: AsciiParams,
+    },
 }
 
 /// Where the Facet module comes from. v1 supports an inline base64 module; the registry
@@ -101,6 +108,9 @@ pub struct PcmInput {
 pub struct AsciiParams {
     cols: u32,
     cell_aspect: f32,
+    /// When true, also return a per-cell tint colour, so the client can colourise the glyph
+    /// render (ignored by the `halfblock` engine, which is always coloured).
+    color: bool,
 }
 
 impl Default for AsciiParams {
@@ -108,6 +118,7 @@ impl Default for AsciiParams {
         AsciiParams {
             cols: 100,
             cell_aspect: 2.0,
+            color: false,
         }
     }
 }
@@ -123,13 +134,24 @@ pub struct SpectralParams {
     fmax: f32,
 }
 
-/// Success body: the composed text and its grid dimensions.
+/// Success body: the grid dimensions plus whichever outputs the engine produced — `text`
+/// (glyph render), `colors` (per-cell tint, when requested), or `glyph`/`fg`/`bg` (half-block
+/// pixel art). Absent fields are omitted.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RenderOk {
     cols: u32,
     rows: u32,
-    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    colors: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    glyph: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fg: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bg: Option<Vec<u32>>,
 }
 
 pub async fn render_handler(
@@ -157,6 +179,15 @@ enum RenderJob {
         cell_aspect: f32,
         /// L2 structural vocabulary rather than L0+L1.
         structural: bool,
+        /// Also return a per-cell tint colour.
+        color: bool,
+    },
+    Halfblock {
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+        cols: u32,
+        cell_aspect: f32,
     },
     Spectral {
         wasm: Vec<u8>,
@@ -196,6 +227,13 @@ fn build_job(req: RenderRequest) -> Result<RenderJob, ApiError> {
             fmin: params.fmin,
             fmax: params.fmax,
         }),
+        RenderRequest::Halfblock { input, params } => Ok(RenderJob::Halfblock {
+            rgba: decode_b64(&input.rgba, "input.rgba")?,
+            width: input.width,
+            height: input.height,
+            cols: params.cols,
+            cell_aspect: params.cell_aspect,
+        }),
     }
 }
 
@@ -213,6 +251,7 @@ fn ascii_job(
         cols: params.cols,
         cell_aspect: params.cell_aspect,
         structural,
+        color: params.color,
     })
 }
 
@@ -226,6 +265,7 @@ fn run_job(sandbox: &Sandbox, job: RenderJob) -> Result<RenderOk, ApiError> {
             cols,
             cell_aspect,
             structural,
+            color,
         } => {
             let (abi, facet) = admit(sandbox, &wasm)?;
             if cols == 0 {
@@ -251,9 +291,44 @@ fn run_job(sandbox: &Sandbox, job: RenderJob) -> Result<RenderOk, ApiError> {
                 tessera_ascii::feature::extract(&image, &grid)
             }
             .map_err(|e| ApiError::bad_request(e.to_string()))?;
+            let colors = if color {
+                Some(
+                    tessera_ascii::color::extract_cell_colors(&image, &grid)
+                        .map_err(|e| ApiError::bad_request(e.to_string()))?,
+                )
+            } else {
+                None
+            };
             run_and_compose(
-                sandbox, &facet, abi, buf.cols, buf.rows, buf.stride, buf.data,
+                sandbox, &facet, abi, buf.cols, buf.rows, buf.stride, buf.data, colors,
             )
+        }
+        RenderJob::Halfblock {
+            rgba,
+            width,
+            height,
+            cols,
+            cell_aspect,
+        } => {
+            if cols == 0 {
+                return Err(ApiError::bad_request(
+                    "params.cols must be greater than zero",
+                ));
+            }
+            let image = ImageRef::new(width, height, &rgba)
+                .map_err(|e| ApiError::bad_request(e.to_string()))?;
+            let grid = Grid::new(width, height, cols, cell_aspect);
+            let hb = tessera_ascii::color::render_halfblock(&image, &grid)
+                .map_err(|e| ApiError::bad_request(e.to_string()))?;
+            Ok(RenderOk {
+                cols: hb.cols,
+                rows: hb.rows,
+                text: None,
+                colors: None,
+                glyph: Some(tessera_ascii::color::HALF_BLOCK),
+                fg: Some(hb.fg),
+                bg: Some(hb.bg),
+            })
         }
         RenderJob::Spectral {
             wasm,
@@ -272,7 +347,7 @@ fn run_job(sandbox: &Sandbox, job: RenderJob) -> Result<RenderOk, ApiError> {
             let buf = tessera_spectral::feature::extract(&signal, &grid)
                 .map_err(|e| ApiError::bad_request(e.to_string()))?;
             run_and_compose(
-                sandbox, &facet, abi, buf.cols, buf.rows, buf.stride, buf.data,
+                sandbox, &facet, abi, buf.cols, buf.rows, buf.stride, buf.data, None,
             )
         }
     }
@@ -292,6 +367,7 @@ fn admit(sandbox: &Sandbox, wasm: &[u8]) -> Result<(AbiKind, Facet), ApiError> {
     Ok((abi, facet))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_and_compose(
     sandbox: &Sandbox,
     facet: &Facet,
@@ -300,6 +376,7 @@ fn run_and_compose(
     rows: u32,
     stride: u32,
     data: Vec<f32>,
+    colors: Option<Vec<u32>>,
 ) -> Result<RenderOk, ApiError> {
     let ncells = (cols as usize) * (rows as usize);
     let tokens = match abi {
@@ -317,7 +394,15 @@ fn run_and_compose(
     }
     .map_err(|e| ApiError::render_failed(format!("Facet failed during render: {e:#}")))?;
     let text = compose_codepoints(cols, rows, &tokens);
-    Ok(RenderOk { cols, rows, text })
+    Ok(RenderOk {
+        cols,
+        rows,
+        text: Some(text),
+        colors,
+        glyph: None,
+        fg: None,
+        bg: None,
+    })
 }
 
 /// Decode a base64 field, mapping failure to a 400 that names the field.

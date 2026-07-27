@@ -92,6 +92,15 @@ Response: `200 { "cols", "rows", "text" }`. Refusals: `422` for a non-conformant
 Input is the authoritative raw form (RGBA8 / f32 PCM) — the exact bytes the client also
 previewed — so there is no decode ambiguity between preview and render.
 
+**Colour.** Colour comes from the source image (a deterministic mean), not the Facet, so it
+stays `preview == render`:
+
+- `"engine": "halfblock"` — coloured pixel art, **no Facet**: each cell is `▀` (U+2580) with
+  its top and bottom pixel-halves' mean colours. Response adds
+  `{ glyph, fg: [rgba…], bg: [rgba…] }` (packed RGBA `u32`, `cols·rows` each); no `text`.
+- `"engine": "ascii"` with `params.color: true` — the glyph render **plus** a per-cell tint:
+  response adds `colors: [rgba…]` alongside `text`, to colourise the ASCII.
+
 ## Auth
 
 Protected endpoints require `Authorization: Bearer <token>`, resolving to a principal with

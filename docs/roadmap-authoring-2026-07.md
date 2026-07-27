@@ -92,4 +92,9 @@ C1 certify program · C2 registry+server program-kind. Docs sweep at the end.
   (coloured pixel art: each cell `▀` with top-half fg / bottom-half bg mean colour, 2× vertical
   resolution, no Facet) + `extract_cell_colors` (per-cell mean, to tint glyph art). Deterministic
   integer means → `preview == render` for colour. Cell-budget guarded. 2 tests; builds to wasm32.
-- (next) B2 — expose colour via `mosaic-wasm`; B3 — `/v1/render` colour modes.
+- **B2 done** — `mosaic-wasm`: `renderHalfblock(...) -> HalfBlock { cols, rows, fg, bg, glyph }`
+  + `extractColors(...)`. `color.test.ts` checks the split + mean vs the native expectations.
+- **B3 done** — server colour modes: `engine: "halfblock"` (coloured pixel art, no Facet,
+  returns `glyph/fg/bg`) and `engine: "ascii"` + `params.color: true` (adds per-cell `colors`
+  alongside `text`). 24 server HTTP tests; server README updated. **Phase B (colour) complete.**
+- (next) C1 — certify a DSL *program*; C2 — registry program-kind + server wiring.
