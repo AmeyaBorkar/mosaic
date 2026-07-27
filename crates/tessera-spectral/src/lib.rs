@@ -427,8 +427,15 @@ pub mod feature {
                     s1 = s;
                 }
                 // Goertzel power → magnitude; clamp tiny negative FP noise before sqrt.
-                let power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
-                let mag = power.max(0.0).sqrt();
+                // Accumulate the magnitude in f64. For a near-DC band (coeff → 2) the
+                // f32 form `s1² + s2² − coeff·s1·s2` is a difference of near-equal ~1e9
+                // terms and cancels catastrophically — a near-DC band came out ~168%
+                // wrong, flipping which band reads brightest after peak-normalization.
+                // f64 +,-,*,sqrt are IEEE-exact, so native and wasm stay bit-identical.
+                // Audit M1.
+                let (p1, p2, c) = (f64::from(s1), f64::from(s2), f64::from(coeff));
+                let power = p1 * p1 + p2 * p2 - c * p1 * p2;
+                let mag = power.max(0.0).sqrt() as f32;
                 data[row_base + f] = mag;
                 if mag > peak {
                     peak = mag;
