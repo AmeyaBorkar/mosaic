@@ -5,7 +5,8 @@
 //! (`facet_ramp.wasm`) over hand-crafted feature buffers that exercise a wide
 //! luminance sweep, clamping, the edge-magnitude threshold, every edge-direction
 //! bin, and each stride (1/2/3). The resulting `(features -> tokens)` vectors are
-//! written as JSON alongside a byte-copy of the exact Facet wasm they came from.
+//! written as JSON; the Facet wasm fixture itself is placed from source by
+//! `scripts/build-facets.sh`, not by this tool.
 //! The TypeScript browser host (`packages/facet-abi`) replays these and must
 //! reproduce every token — that is what makes "preview == render" (D9) a checked
 //! property rather than a hope.
@@ -75,16 +76,15 @@ fn main() {
     json.push_str("  ]\n");
     json.push_str("}\n");
 
-    // Write into packages/facet-abi/test so the TS package is self-contained and
-    // its fixtures are provably the exact bytes this run measured.
+    // Write golden.json into packages/facet-abi/test. The Facet wasm fixture beside it is
+    // placed by scripts/build-facets.sh (built from source, gated by CI's rebuild-diff),
+    // not copied here — one owner for every committed .wasm, and this script's output is
+    // then covered by the golden diff, not silently rewritten outside it (audit L7).
     let out_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/facet-abi/test");
-    let fixtures = out_dir.join("fixtures");
-    fs::create_dir_all(&fixtures).expect("create fixtures dir");
-    fs::write(fixtures.join("facet_ramp.wasm"), FACET_WASM).expect("write wasm copy");
     fs::write(out_dir.join("golden.json"), &json).expect("write golden.json");
 
     println!(
-        "emit_golden: wrote {} cases + facet_ramp.wasm to {}",
+        "emit_golden: wrote {} cases to {}",
         cases.len(),
         out_dir.display()
     );
