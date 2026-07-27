@@ -14,6 +14,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 # The authoritative gate + host. certify runs here; render runs Facets through the sandbox.
 mosaic-certify = { path = "../mosaic-certify" }
 mosaic-runtime = { path = "../mosaic-runtime" }
+# The engines the render endpoint runs — the SAME feature-extraction and composition the
+# browser bridge compiles to wasm, so a server render is bit-identical to the preview.
+mosaic-core = { path = "../mosaic-core" }
+tessera-ascii = { path = "../tessera-ascii" }
+tessera-spectral = { path = "../tessera-spectral" }
 # Request/response DTOs and the error envelope.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

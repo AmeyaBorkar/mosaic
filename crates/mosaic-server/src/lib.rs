@@ -25,6 +25,7 @@ use mosaic_runtime::Sandbox;
 mod certify;
 pub mod error;
 mod health;
+mod render;
 
 /// Maximum request body. An 8 MiB Facet base64-encodes to ~10.9 MiB, and raw-RGBA render
 /// inputs can be larger; 32 MiB is generous while still bounding per-request memory. Axum's
@@ -45,6 +46,7 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(health::healthz))
         .route("/v1/certify", post(certify::certify_handler))
+        .route("/v1/render", post(render::render_handler))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }

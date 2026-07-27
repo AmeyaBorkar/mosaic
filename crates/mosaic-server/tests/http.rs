@@ -88,3 +88,82 @@ async fn certify_rejects_bad_base64_with_400() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(resp).await["error"]["code"], "bad_request");
 }
+
+#[tokio::test]
+async fn render_ascii_produces_a_text_grid() {
+    let (w, h) = (8u32, 8u32);
+    let rgba = vec![200u8; (w * h * 4) as usize]; // a solid bright image
+    let body = serde_json::json!({
+        "engine": "ascii",
+        "facet": { "inline": STANDARD.encode(FACET_RAMP) },
+        "input": { "rgba": STANDARD.encode(&rgba), "width": w, "height": h },
+        "params": { "cols": 8, "cellAspect": 1.0 }
+    });
+    let resp = test_app()
+        .oneshot(post_json("/v1/render", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let out = json_body(resp).await;
+    assert_eq!(out["cols"], 8);
+    let rows = out["rows"].as_u64().unwrap() as usize;
+    let text = out["text"].as_str().unwrap();
+    assert!(!text.is_empty());
+    // compose joins `rows` rows of `cols` chars with '\n' between them.
+    assert_eq!(text.lines().count(), rows);
+}
+
+#[tokio::test]
+async fn render_spectral_produces_a_text_grid() {
+    // A 1024-sample ramp as little-endian f32 bytes.
+    let mut pcm = Vec::with_capacity(1024 * 4);
+    for i in 0..1024u32 {
+        pcm.extend_from_slice(&(i as f32 / 1024.0).to_le_bytes());
+    }
+    let body = serde_json::json!({
+        "engine": "spectral",
+        "facet": { "inline": STANDARD.encode(FACET_RAMP) },
+        "input": { "pcm": STANDARD.encode(&pcm), "sampleRate": 8000 },
+        "params": { "bands": 16, "win": 256, "hop": 128, "fmin": 50.0, "fmax": 4000.0 }
+    });
+    let resp = test_app()
+        .oneshot(post_json("/v1/render", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let out = json_body(resp).await;
+    assert_eq!(out["rows"], 16); // one row per band
+    assert!(out["text"].as_str().unwrap().len() >= 16);
+}
+
+#[tokio::test]
+async fn render_rejects_a_non_conformant_facet_with_422() {
+    let body = serde_json::json!({
+        "engine": "ascii",
+        "facet": { "inline": STANDARD.encode(b"not a wasm module") },
+        "input": { "rgba": STANDARD.encode(vec![0u8; 64]), "width": 4, "height": 4 },
+        "params": { "cols": 4 }
+    });
+    let resp = test_app()
+        .oneshot(post_json("/v1/render", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(json_body(resp).await["error"]["code"], "malformed");
+}
+
+#[tokio::test]
+async fn render_rejects_a_mismatched_image_size_with_400() {
+    let body = serde_json::json!({
+        "engine": "ascii",
+        "facet": { "inline": STANDARD.encode(FACET_RAMP) },
+        "input": { "rgba": STANDARD.encode(vec![0u8; 10]), "width": 4, "height": 4 }, // needs 64 bytes
+        "params": { "cols": 4 }
+    });
+    let resp = test_app()
+        .oneshot(post_json("/v1/render", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(resp).await["error"]["code"], "bad_request");
+}

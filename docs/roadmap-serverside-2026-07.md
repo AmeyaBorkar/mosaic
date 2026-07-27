@@ -197,4 +197,12 @@ P3  i) `mosaic-registry` crate: types + Store trait + in-memory + SQLite (bundle
 - **P1d done** — `facet-abi verifyCertificate(bytes, cert)`: replays probes on the browser host,
   checks hash binding + every outcome. `cert.test.ts` (5 tests, gather+propagation) added to
   `package.json` + CI web job. Typecheck + tests green. **Phase 1 (conformance gate) complete.**
-- (next) P2 — `mosaic-server` skeleton: `app()`, `/healthz`, error envelope, bin; workspace + CI.
+- **P2e done** — `mosaic-server`: axum `app()`, `/healthz`, one error envelope
+  (`{error:{code,message}}`), `POST /v1/certify` (spawn_blocking + shared `Arc<Sandbox>`),
+  bin with graceful shutdown, 32 MiB body limit. 4 HTTP tests (oneshot). Workspace + CI.
+- **P2f done** — `POST /v1/render`: the authoritative native render. Engine-tagged request
+  (`ascii`/`ascii-structural`/`spectral`), inline base64 Facet, raw RGBA / f32 PCM input.
+  Mirrors the browser pipeline (`feature::extract*` → sandbox → `compose_codepoints`) with the
+  same source, so it's bit-identical to preview. 4 more HTTP tests (ascii+spectral grids, 422
+  non-conformant, 400 bad input). **Render endpoint (roadmap point 2) complete.**
+- (next) P2g — Dockerfile + CI release-build; then P3 registry.

@@ -17,6 +17,10 @@ pub enum ApiError {
     /// The Facet was refused by the conformance gate — 422, carrying the rejection's
     /// stable code and message.
     Rejected(Rejection),
+    /// A certified/admitted Facet trapped or errored while rendering (e.g. it exhausted its
+    /// fuel or accessed out of bounds on this input) — 422. Distinct from `Rejected`, which
+    /// is a static refusal; this is a runtime failure on a specific input.
+    RenderFailed(String),
     /// The requested resource does not exist — 404.
     NotFound(String),
     /// An internal failure (e.g. a worker task panicked) — 500. The message is generic;
@@ -33,6 +37,10 @@ impl ApiError {
         ApiError::NotFound(message.into())
     }
 
+    pub fn render_failed(message: impl Into<String>) -> Self {
+        ApiError::RenderFailed(message.into())
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         ApiError::Internal(message.into())
     }
@@ -46,6 +54,11 @@ impl IntoResponse for ApiError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 r.code.as_str().to_string(),
                 r.message,
+            ),
+            ApiError::RenderFailed(m) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "render_failed".to_string(),
+                m,
             ),
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, "not_found".to_string(), m),
             ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, "internal".to_string(), m),

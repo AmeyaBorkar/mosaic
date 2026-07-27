@@ -944,9 +944,12 @@ dependencies = [
  "axum",
  "base64",
  "mosaic-certify",
+ "mosaic-core",
  "mosaic-runtime",
  "serde",
  "serde_json",
+ "tessera-ascii",
+ "tessera-spectral",
  "tokio",
  "tower",
 ]
