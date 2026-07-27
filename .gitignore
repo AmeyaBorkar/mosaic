@@ -24,6 +24,11 @@ build/
 .env
 .env*.local
 
+# Runtime artifacts from mosaic-server: the durable registry database (MOSAIC_DB) and its
+# lock. Never a build input — created when the server runs.
+*.redb
+*.redb.lock
+
 # OS / editor
 .DS_Store
 Thumbs.db
