@@ -119,6 +119,7 @@ jobs:
           crates/mosaic-wasm/test/pipeline.test.ts
           crates/mosaic-wasm/test/spectral.test.ts
           crates/mosaic-wasm/test/composite.test.ts
+          crates/mosaic-wasm/test/authoring.test.ts
 
   audit:
     name: Security — cargo audit (RUSTSEC advisories)

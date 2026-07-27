@@ -348,9 +348,10 @@ struct ParamDecl {
 /// Compile a DSL Facet for `engine` (`"ascii"` or `"spectral"`) in the browser — the same
 /// `mosaic-dsl` the server runs, so the bytecode is byte-identical. `params_json` is a JSON
 /// array of `{ "name", "value" }`. Returns the [`CompiledFacet`] (program + manifest), or
-/// throws the compile error with its byte offset into the source.
-#[wasm_bindgen(js_name = compileFacet)]
-pub fn compile_facet(engine: &str, src: &str, params_json: &str) -> Result<CompiledFacet, JsError> {
+/// throws the compile error with its byte offset into the source. (Named `compileDsl` to
+/// distinguish it from `@mosaic/facet-abi`'s `compileFacet`, which compiles a wasm *module*.)
+#[wasm_bindgen(js_name = compileDsl)]
+pub fn compile_dsl(engine: &str, src: &str, params_json: &str) -> Result<CompiledFacet, JsError> {
     let decls: Vec<ParamDecl> = serde_json::from_str(params_json).map_err(|e| {
         JsError::new(&format!(
             "params must be a JSON array of {{name, value}}: {e}"

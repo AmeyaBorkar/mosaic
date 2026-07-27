@@ -82,4 +82,10 @@ C1 certify program · C2 registry+server program-kind. Docs sweep at the end.
   offset 10+i*4) without recompiling; patched program still validates. Native test + 3 TS
   tests (offset correctness + a patched threshold changing the render through the real
   interp). No wasm drift (DCE'd from interp). Registered in package.json + CI.
-- (next) A3 — browser SDK glue (`packages/mosaic-preview`).
+- **A3 done** — renamed the wasm DSL binding `compileFacet` → `compileDsl` (clearer vs
+  facet-abi's module `compileFacet`), and added `crates/mosaic-wasm/test/authoring.test.ts`:
+  the full loop proven end to end (compile DSL → extract → run in sandbox → compose) + live
+  controls (applyParams). It doubles as the UI's reference. 11 wasm node tests green.
+  **Phase A (browser authoring + controls loop) complete** — a UI can author, preview, and
+  tweak entirely in-browser, provably identical to the server.
+- (next) B1 — colour engine (per-cell mean RGB + colour-aware composition).
