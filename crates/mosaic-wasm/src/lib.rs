@@ -13,6 +13,8 @@
 //! 3. [`compose`] — tokens → validated ASCII text (here, wasm).
 
 use mosaic_core::composite;
+use mosaic_dsl::Schema;
+use serde::{Deserialize, Serialize};
 use tessera_ascii::feature;
 use tessera_ascii::{Grid, ImageRef, MAX_CELLS};
 use tessera_spectral::{SignalRef, SpectroGrid, feature as spectral_feature};
@@ -242,5 +244,162 @@ fn parse_blend(name: &str) -> Result<composite::Blend, JsError> {
         "replace" => Ok(composite::Blend::Replace),
         "stipple" => Ok(composite::Blend::StippleOver),
         other => Err(JsError::new(&format!("unknown blend mode: {other:?}"))),
+    }
+}
+
+// ---- DSL authoring (O3): compile author text -> bytecode, in the browser ----
+
+/// A feature vocabulary: `(name, slot)` pairs, as `mosaic_dsl::Schema::features` expects.
+type FeatureVocab = &'static [(&'static str, u16)];
+
+/// The feature vocabulary of an engine, for compiling a DSL Facet against it. The stride and
+/// slot names mirror `tessera_*::feature`, so a DSL Facet references the same features the
+/// browser extracts (`ascii`: L0+L1 density/edge; `spectral`: band energy).
+fn engine_schema(engine: &str) -> Result<(u16, FeatureVocab), String> {
+    match engine {
+        "ascii" => Ok((3, &[("luma", 0), ("grad_mag", 1), ("grad_dir", 2)])),
+        "spectral" => Ok((1, &[("band_energy", 0)])),
+        other => Err(format!(
+            "unknown engine {other:?} (expected \"ascii\" or \"spectral\")"
+        )),
+    }
+}
+
+/// One param in a Facet's control manifest: its name, current (baked) value, and index into
+/// the bytecode's params section — the offset a live control patches (see `patch_params`).
+#[derive(Serialize)]
+struct ParamManifest {
+    name: String,
+    value: f32,
+    index: u32,
+}
+
+/// A DSL Facet's control manifest: the engine it targets and its params. A UI renders one
+/// control per param and, on change, patches the program by `index` instead of recompiling.
+#[derive(Serialize)]
+struct FacetManifest {
+    engine: String,
+    stride: u16,
+    params: Vec<ParamManifest>,
+}
+
+/// Core DSL compile, free of wasm types so it is unit-tested natively in the workspace.
+/// Compiles `src` for `engine` with the given params (name, baked value).
+fn compile_program(
+    engine: &str,
+    src: &str,
+    params: &[(String, f32)],
+) -> Result<(Vec<u8>, FacetManifest), String> {
+    let (stride, features) = engine_schema(engine)?;
+    let param_refs: Vec<(&str, f32)> = params.iter().map(|(n, v)| (n.as_str(), *v)).collect();
+    let schema = Schema {
+        stride,
+        features,
+        params: &param_refs,
+    };
+    let program = mosaic_dsl::compile(src, &schema).map_err(|e| e.to_string())?;
+    let manifest = FacetManifest {
+        engine: engine.to_string(),
+        stride,
+        params: params
+            .iter()
+            .enumerate()
+            .map(|(i, (name, value))| ParamManifest {
+                name: name.clone(),
+                value: *value,
+                index: i as u32,
+            })
+            .collect(),
+    };
+    Ok((program, manifest))
+}
+
+/// A compiled DSL Facet: the bytecode program and its control manifest (JSON).
+#[wasm_bindgen]
+pub struct CompiledFacet {
+    program: Vec<u8>,
+    manifest_json: String,
+}
+
+#[wasm_bindgen]
+impl CompiledFacet {
+    /// The bytecode program — hand this to `runFacetProgram` with the interpreter Facet.
+    #[wasm_bindgen(getter)]
+    pub fn program(&self) -> Vec<u8> {
+        self.program.clone()
+    }
+
+    /// The control manifest as JSON: `{ engine, stride, params: [{ name, value, index }] }`.
+    #[wasm_bindgen(getter = manifestJson)]
+    pub fn manifest_json(&self) -> String {
+        self.manifest_json.clone()
+    }
+}
+
+/// One param declaration from the caller: a name and its value (the source references it by
+/// name; the value is baked into the program and later patchable).
+#[derive(Deserialize)]
+struct ParamDecl {
+    name: String,
+    #[serde(default)]
+    value: f32,
+}
+
+/// Compile a DSL Facet for `engine` (`"ascii"` or `"spectral"`) in the browser — the same
+/// `mosaic-dsl` the server runs, so the bytecode is byte-identical. `params_json` is a JSON
+/// array of `{ "name", "value" }`. Returns the [`CompiledFacet`] (program + manifest), or
+/// throws the compile error with its byte offset into the source.
+#[wasm_bindgen(js_name = compileFacet)]
+pub fn compile_facet(engine: &str, src: &str, params_json: &str) -> Result<CompiledFacet, JsError> {
+    let decls: Vec<ParamDecl> = serde_json::from_str(params_json).map_err(|e| {
+        JsError::new(&format!(
+            "params must be a JSON array of {{name, value}}: {e}"
+        ))
+    })?;
+    let params: Vec<(String, f32)> = decls.into_iter().map(|d| (d.name, d.value)).collect();
+    let (program, manifest) =
+        compile_program(engine, src, &params).map_err(|e| JsError::new(&e))?;
+    let manifest_json =
+        serde_json::to_string(&manifest).map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(CompiledFacet {
+        program,
+        manifest_json,
+    })
+}
+
+#[cfg(test)]
+mod dsl_tests {
+    use super::*;
+
+    #[test]
+    fn compiles_ascii_dsl_byte_identical_to_native() {
+        let src = r#"grad_mag > threshold ? glyph(clamp(grad_dir * 1.27 + 2.0, 0, 3), "-/|\\") : ramp(luma, " .:-=+*#%@")"#;
+        let params = vec![("threshold".to_string(), 0.6f32)];
+        let (program, manifest) = compile_program("ascii", src, &params).unwrap();
+        // A direct native compile against the same schema must produce the same bytes.
+        let native = mosaic_dsl::compile(
+            src,
+            &Schema {
+                stride: 3,
+                features: &[("luma", 0), ("grad_mag", 1), ("grad_dir", 2)],
+                params: &[("threshold", 0.6)],
+            },
+        )
+        .unwrap();
+        assert_eq!(program, native);
+        assert_eq!(manifest.params.len(), 1);
+        assert_eq!(manifest.params[0].name, "threshold");
+        assert_eq!(manifest.params[0].index, 0);
+    }
+
+    #[test]
+    fn rejects_unknown_engine() {
+        assert!(compile_program("nope", "luma", &[]).is_err());
+    }
+
+    #[test]
+    fn propagates_a_compile_error() {
+        // `mystery` is neither a feature nor a declared param.
+        assert!(compile_program("ascii", "mystery", &[]).is_err());
     }
 }
