@@ -22,6 +22,15 @@ const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
  *  the browser analogue of the native StoreLimits memory cap. */
 const MAX_MEMORY_PAGES = 256;
 
+/** Maximum module size, mirroring the native `MAX_MODULE_BYTES` (8 MiB) — bounds
+ *  untrusted compilation cost and matches what the server will admit. */
+const MAX_MODULE_BYTES = 8 * 1024 * 1024;
+
+/** Maximum table elements and table count, mirroring the native
+ *  `StoreLimits::tables(1).table_elements(10_000)`. A funcref table's backing store is
+ *  engine-side (outside linear memory), so the 16 MiB memory cap does not bound it. */
+const MAX_TABLE_ELEMENTS = 10_000;
+
 /** Read an unsigned LEB128 `u32` at `off`; returns `[value, nextOffset]`.
  *
  *  A wasm `u32` LEB128 is at most 5 bytes. An over-long or overflowing encoding is
@@ -134,6 +143,66 @@ export function checkMemoryLimits(bytes: BufferSource): void {
   }
 }
 
+/** Declared limits of each table defined in the module. A table type is a reftype byte
+ *  followed by the same limits encoding as memory. Parsed from raw bytes because the
+ *  table backing store is engine-side (outside linear memory) and not otherwise capped. */
+function readTableLimits(
+  bytes: Uint8Array,
+): Array<{ min: number; max: number | undefined }> {
+  const out: Array<{ min: number; max: number | undefined }> = [];
+  let off = 8; // skip the 8-byte magic + version
+  while (off < bytes.length) {
+    const id = bytes[off++] ?? 0;
+    const [size, afterSize] = readUleb(bytes, off);
+    off = afterSize;
+    const sectionEnd = off + size;
+    if (id === 4) {
+      let p = off;
+      const [count, afterCount] = readUleb(bytes, p);
+      p = afterCount;
+      for (let i = 0; i < count; i++) {
+        p++; // reftype byte (funcref / externref); table64 limits fail readUleb below
+        const flags = bytes[p++] ?? 0;
+        const [min, afterMin] = readUleb(bytes, p);
+        p = afterMin;
+        let max: number | undefined;
+        if ((flags & 0x01) !== 0) {
+          const [m, afterMax] = readUleb(bytes, p);
+          p = afterMax;
+          max = m;
+        }
+        out.push({ min, max });
+      }
+    }
+    off = sectionEnd;
+  }
+  return out;
+}
+
+/**
+ * Reject a Facet with more than one table or a table larger than the element cap,
+ * mirroring the native `StoreLimits::tables(1).table_elements(10_000)`. Without this the
+ * browser previews a table-bomb Facet the server refuses at instantiation.
+ */
+export function checkTableLimits(bytes: BufferSource): void {
+  const u8 = ArrayBuffer.isView(bytes)
+    ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    : new Uint8Array(bytes);
+  const tables = readTableLimits(u8);
+  if (tables.length > 1) {
+    throw new FacetAbiError(
+      `Facet must declare at most one table, found ${tables.length}`,
+    );
+  }
+  for (const t of tables) {
+    if (t.min > MAX_TABLE_ELEMENTS || (t.max !== undefined && t.max > MAX_TABLE_ELEMENTS)) {
+      throw new FacetAbiError(
+        `Facet table exceeds the ${MAX_TABLE_ELEMENTS}-element cap`,
+      );
+    }
+  }
+}
+
 /** Structural exports every Facet must have, regardless of its map entry point. */
 const REQUIRED_EXPORTS: ReadonlyArray<readonly [string, WebAssembly.ImportExportKind]> = [
   ["memory", "memory"],
@@ -180,6 +249,14 @@ export function validateFacetModule(module: WebAssembly.Module): void {
 /** Compile untrusted Facet bytes and validate them. Async: compilation is the
  *  one step browsers stream off the main thread. */
 export async function compileFacet(bytes: BufferSource): Promise<WebAssembly.Module> {
+  // Reject an oversized module before handing it to the compiler, mirroring the native
+  // MAX_MODULE_BYTES so the browser never spends seconds compiling (or previews) a
+  // module the server rejects up front.
+  if (bytes.byteLength > MAX_MODULE_BYTES) {
+    throw new FacetAbiError(
+      `Facet module is ${bytes.byteLength} bytes, exceeding the ${MAX_MODULE_BYTES}-byte limit`,
+    );
+  }
   let module: WebAssembly.Module;
   try {
     module = await WebAssembly.compile(bytes);
@@ -187,6 +264,7 @@ export async function compileFacet(bytes: BufferSource): Promise<WebAssembly.Mod
     throw new FacetAbiError(`Facet failed to compile: ${messageOf(e)}`);
   }
   checkMemoryLimits(bytes);
+  checkTableLimits(bytes);
   validateFacetModule(module);
   return module;
 }

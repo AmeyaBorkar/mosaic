@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { checkMemoryLimits } from "../src/host.ts";
+import { checkMemoryLimits, checkTableLimits, compileFacet } from "../src/host.ts";
 
 const MAGIC = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]; // "\0asm" + version 1
 
@@ -67,4 +67,33 @@ test("rejects an overflowing LEB128 maximum instead of truncating it", () => {
   // count=1, flags=0x01, min=1, then the 5-byte max (body = 8 bytes).
   const overflow = mod(5, 8, 1, 0x01, 1, 0x80, 0x82, 0x80, 0x80, 0x10);
   assert.throws(() => checkMemoryLimits(overflow), /exceeds u32|LEB128/);
+});
+
+// Table section (id 4): [id, size, count, entries…]; entry = [reftype, flags, min, (max)?].
+// reftype 0x70 = funcref. Native caps tables at 1 table / 10 000 elements.
+
+test("rejects a table larger than the 10,000-element cap", () => {
+  // count=1; funcref; flags=0x00 (no max); min=20000 (LEB 0xA0 0x9C 0x01). body = 6.
+  const bigTable = mod(4, 6, 1, 0x70, 0x00, 0xa0, 0x9c, 0x01);
+  assert.throws(() => checkTableLimits(bigTable), /element cap/);
+});
+
+test("rejects more than one table (native StoreLimits caps at one)", () => {
+  // count=2, two funcref [1] tables (entry = reftype, flags 0x00, min 1). body = 7.
+  const twoTables = mod(4, 7, 2, 0x70, 0x00, 1, 0x70, 0x00, 1);
+  assert.throws(() => checkTableLimits(twoTables), /at most one table/);
+});
+
+test("accepts a single small table, and no table section", () => {
+  // count=1, funcref, flags=0x01 (has-max), min=1, max=1. body = 5.
+  const ok = mod(4, 5, 1, 0x70, 0x01, 1, 1);
+  assert.doesNotThrow(() => checkTableLimits(ok));
+  assert.doesNotThrow(() => checkTableLimits(mod()));
+});
+
+test("rejects a module larger than the 8 MiB cap before compiling", async () => {
+  // 8 MiB + 1 byte of a valid header + padding; the length check fires before compile.
+  const oversized = new Uint8Array(8 * 1024 * 1024 + 1);
+  oversized.set([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+  await assert.rejects(() => compileFacet(oversized), /exceeding the .* limit/);
 });
