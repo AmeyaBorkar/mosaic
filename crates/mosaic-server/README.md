@@ -23,7 +23,24 @@ Or as a container (multi-stage, non-root, slim runtime — see `Dockerfile` at t
 
 ```sh
 docker build -t mosaic-server .
-docker run --rm -p 8080:8080 mosaic-server
+docker run --rm -p 8080:8080 -e MOSAIC_DB=/data/registry.redb -v mosaic:/data mosaic-server
+```
+
+## Configuration (environment)
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `MOSAIC_ADDR` | Bind address | `127.0.0.1:8080` |
+| `MOSAIC_DB` | Path to the durable registry (redb). If unset, an in-memory registry is used (data is **not** persisted). | *(in-memory)* |
+| `MOSAIC_TOKENS` | Path to a JSON file of bearer tokens (see **Auth**). If unset, no token authenticates. | *(none)* |
+
+`MOSAIC_TOKENS` is a JSON array; keep it out of the repo (a `.env` / secret):
+
+```json
+[
+  { "token": "s3cret-author-token", "id": "alice", "roles": ["author"] },
+  { "token": "s3cret-mod-token", "id": "max", "roles": ["author", "moderator"] }
+]
 ```
 
 ## Endpoints
@@ -75,9 +92,49 @@ Response: `200 { "cols", "rows", "text" }`. Refusals: `422` for a non-conformant
 Input is the authoritative raw form (RGBA8 / f32 PCM) — the exact bytes the client also
 previewed — so there is no decode ambiguity between preview and render.
 
+## Auth
+
+Protected endpoints require `Authorization: Bearer <token>`, resolving to a principal with
+roles (`author`, `moderator`). Tokens come from `MOSAIC_TOKENS` (above) and are stored
+hashed. `401` = missing/invalid token; `403` = authenticated but lacking the role.
+
+### `GET /v1/whoami`
+
+Echo the caller's identity. `200 { "id", "roles": [...] }` (requires a valid token).
+
+## Registry
+
+A Facet's lifecycle: an author **publishes** → it is certified and stored `certified` →
+a **moderator** approves or rejects it. Public callers see only `published` Facets; a
+not-yet-published Facet is a `404` to anyone but its author or a moderator (its existence is
+not revealed).
+
+### `POST /v1/facets` *(author)*
+
+Publish. Body: `{ "name": "My Facet", "wasm": "<base64 module>" }`. Certifies, then stores.
+`201 { "facet": { id, name, author, abiKind, wasmSha256, state, createdAt, certificate } }`.
+`422` non-conformant · `403` not an author · `400` empty/oversized name or bad base64.
+
+### `GET /v1/facets`
+
+List `published` Facets, newest first: `200 { "facets": [ summary… ] }`. A moderator may pass
+`?state=certified` (or `rejected`) to review the queue (`403` for non-moderators).
+
+### `GET /v1/facets/{id}` · `GET /v1/facets/{id}/wasm`
+
+A Facet's metadata + certificate, and its module bytes (`application/wasm`). Subject to the
+visibility rule above (`404` if not visible to the caller).
+
+### `POST /v1/facets/{id}/moderate` *(moderator)*
+
+Body: `{ "decision": "publish" | "reject" }`. The only transition is `certified →
+published | rejected`: `200` with the updated record · `409` if not awaiting moderation ·
+`404` unknown id · `403` not a moderator.
+
 ## Notes
 
 - Request bodies are capped at 32 MiB.
-- CPU-bound work (compiling and running Facet wasm, feature extraction) runs on blocking
-  workers; the sandbox is shared and hands every execution its own zero-capability store.
-- The registry endpoints (publish / list / moderate) are added in the registry phase.
+- CPU-bound work (compiling/running Facet wasm, feature extraction) and blocking registry
+  I/O run on blocking workers; the sandbox is shared and hands every execution its own
+  zero-capability store.
+- The durable registry is redb (pure-Rust, embedded, ACID). Set `MOSAIC_DB` to persist.

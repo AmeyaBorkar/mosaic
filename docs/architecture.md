@@ -318,14 +318,56 @@ untrusted in the sandbox byte-identical to the native reference — `ramp(luma, 
 native density exactly, and a branchy density-or-edge Facet is deterministic and
 non-degenerate. v1 targets the gather ABI; propagation (`run2d`) is an additive follow-on.
 
+### D15 — Server-authoritative conformance gate and render *(settled)*
+The browser enforces the conformance profile "user side" (D9); the **server is the
+authority**. `mosaic-certify` is a single gate with two layers: a static `check_profile`
+that admits *exactly* what the browser mirror admits (zero imports; one bounded, non-shared,
+32-bit linear memory within the page cap; at most one 32-bit table within the element cap;
+the ABI exports; one map entry point), and `certify`, which runs the admitted Facet through
+the proven native host over a deterministic probe suite and emits a **Certificate** — golden
+`(features → tokens)` vectors bound to the exact bytes by a SHA-256. The browser's
+`verifyCertificate` (in `@mosaic/facet-abi`) replays those probes and must reproduce every
+outcome, so `preview == render` becomes a checked property for *any* certified Facet, not
+only the shipped goldens. The probe suite is an honest representative *sample*, not a proof
+over all inputs.
+
+The authoritative render is `mosaic-server`'s `POST /v1/render`. It mirrors the browser
+bridge's pipeline — `tessera_*::feature::extract*` → `Sandbox::run_map`/`run_map_2d` →
+`mosaic_core::compose_codepoints` — run natively, using the *same source* the browser
+compiles to wasm, so the server render is bit-identical to the preview by construction. The
+engine name selects the feature vocabulary (and stride); the certified ABI kind selects
+gather vs propagation. Input is authoritative raw bytes (RGBA8 / f32 PCM) — no decode
+ambiguity. CPU-bound work runs on blocking workers off the async executor.
+
+### D16 — Facet registry with bearer auth and moderation *(settled)*
+`mosaic-registry` is the store — a `Store` trait (insert / get / get_wasm / list / set_state)
+with a durable `RedbStore` (pure-Rust, embedded, ACID; no C toolchain, no server process) and
+an `InMemoryStore` the endpoints and auth are tested against. The lifecycle is a small,
+explicit state machine: an author **publishes** (`POST /v1/facets`), which runs the gate and
+stores the Facet `Certified` awaiting review; a **moderator** transitions it `Certified →
+Published | Rejected` (`POST /v1/facets/{id}/moderate`), the only transitions permitted (any
+other is a 409). Public listing shows `Published` only; a moderator reviews the queue via
+`?state=certified`. A not-yet-published Facet is visible only to its author or a moderator,
+and to everyone else is a 404 — the registry never reveals that an unpublished Facet exists.
+
+Auth is `Authorization: Bearer <token>` resolving to a `Principal` (id + roles: author,
+moderator). Tokens are configured out of band (`MOSAIC_TOKENS`, a JSON file kept out of the
+repo) and stored **hashed** — the table is `SHA-256(token) → Principal`, so no plaintext
+token sits in memory and a lookup is constant-time in the token value on a preimage-resistant
+digest (the standard opaque-API-token pattern). The service is container-ready (a multi-stage
+`Dockerfile`, non-root slim runtime); the durable registry path is `MOSAIC_DB`. CD (image
+push / deploy) needs registry credentials and is left an explicit, unwired hook rather than
+faked.
+
 ## Open decisions (from the vision — deliberately not yet frozen)
 
 - *All of the vision's open questions — O1, O2, O4, O4.1, O5, and now O3 — are settled;
   see D5, D6 and D11–D14.*
-- What remains is **platform build-out, not contract design**: the conformance gate
-  (registration-time wasm-feature + golden-token check), the registry (+ auth/moderation)
-  that stores Facets and Compositions, an authoritative server render endpoint, and the web
-  shell. These are engineering, not open decisions.
+- The platform build-out is now largely engineering-complete: the **conformance gate**
+  (server-authoritative certify, D15), the **authoritative server render endpoint** (D15),
+  and the **registry (+ auth/moderation)** (D16) are built. What remains is the **web shell**
+  (`apps/web`, the Next.js editor/preview over these endpoints) and, on the engine track, new
+  Tesserae (ANSI/colour, halftone, data→art). These are engineering, not open decisions.
 
 ## Repository layout
 
@@ -335,12 +377,16 @@ crates/
   glyph-atlas/     # shared no_std L2 glyph atlas + SSD matcher (engine + Facet, no drift)
   dither/          # shared no_std Floyd-Steinberg error-diffusion (engine + Facet, no drift)
   mosaic-runtime/  # WASM host: pure, fuel-metered, memory-bounded Facet sandbox
+  mosaic-certify/  # server-authoritative gate: static profile + golden-probe certificate (D15)
   tessera-ascii/   # first engine: images (L0/L1 density+edges, L2 structural glyph-match)
   tessera-spectral/# second engine: audio PCM -> spectrogram art (proves contract universality, O5)
-  mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose + Canvas (built)
+  mosaic-wasm/     # wasm-bindgen browser bindings: extract + compose + Canvas + verifyCertificate (built)
   mosaic-compose/  # declarative, JSON-serializable Compositions (O4.1) rendered via a resolver
   mosaic-vm/       # DSL bytecode VM (no_std): validated, deterministic per-cell interpreter (O3)
   mosaic-dsl/      # the Facet DSL compiler: expression text -> bytecode (O3)
+  mosaic-registry/ # Facet registry: Store trait + durable redb backend + in-memory (D16)
+  mosaic-server/   # authoritative HTTP service: certify, render, registry, auth/moderation (D15/D16)
+Dockerfile         # multi-stage production image for mosaic-server (non-root slim runtime)
 apps/
   web/             # Next.js shell: editor, controls, live preview, registry   (planned)
 facets/ramp/       # bootstrap Facet (Rust -> wasm): density ramp + edge glyphs

@@ -10,7 +10,9 @@ users run those methods on their own media, with a live in-browser preview that 
 
 See [`vision.md`](./vision.md) for the vision and
 [`docs/architecture.md`](./docs/architecture.md) for the architecture and every
-decision made so far (D1–D14).
+decision made so far (D1–D16). The authoritative server — the conformance gate,
+the render endpoint, and the Facet registry with auth/moderation (D15/D16) — lives
+in [`crates/mosaic-server`](./crates/mosaic-server) (see its README for the API).
 
 ## The three layers
 

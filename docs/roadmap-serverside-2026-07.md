@@ -212,4 +212,29 @@ P3  i) `mosaic-registry` crate: types + Store trait + in-memory + SQLite (bundle
   in-CI `docker build` job was deliberately *not* added: no Docker daemon was available to
   verify it locally, so gating on it would risk a red `main`; the image builds via
   `docker build .` and is the CD artifact.) **Phase 2 (render endpoint + CD-ready) complete.**
-- (next) P3 — `mosaic-registry` crate (Store trait + SQLite) then server publish/list/moderate + auth.
+- **P3i done** — `mosaic-registry`: `Store` trait + domain types + pure-Rust `InMemoryStore`.
+- **P3i2 done** — durable `RedbStore` (redb chosen over SQLite: pure-Rust, no C toolchain,
+  compiles + verifies on every target). `data_survives_reopen` proves durability.
+- **P3j done** — bearer-token auth: `Principal`/`Role`/`AuthConfig` (SHA-256-hashed lookup),
+  `AuthedPrincipal`/`OptionalPrincipal` extractors, `GET /v1/whoami`. `MOSAIC_TOKENS` config.
+- **P3k done** — registry endpoints: `POST /v1/facets` (author, certify-on-publish),
+  `GET /v1/facets`, `GET /v1/facets/{id}` + `/wasm`, with authz + the 404-not-403 visibility
+  rule. `Arc<dyn Store>` in `AppState`; `main` picks `RedbStore` via `MOSAIC_DB` else in-memory.
+- **P3l done** — moderation: `POST /v1/facets/{id}/moderate` (`Certified → Published|Rejected`
+  only; 409 otherwise), moderator queue via `?state=`. 22 server HTTP tests total.
+- **P3m done** — docs: architecture.md D15 (gate + render) + D16 (registry + auth/moderation),
+  repo layout, server README (full API + config), root README. **Registry (roadmap point 3) complete.**
+
+## Final state
+
+All of roadmap points 1–3 are built, each commit CI-green and bisectable:
+- **Point 1 — conformance gate:** `mosaic-certify` (static profile + golden-probe certificate)
+  + browser `verifyCertificate` closing `preview == render` per Facet + committed cert golden.
+- **Point 2 — authoritative render:** `mosaic-server` `POST /v1/render`, bit-identical to the
+  browser by shared source.
+- **Point 3 — registry + auth/moderation:** `mosaic-registry` (durable redb) + the full HTTP
+  lifecycle behind bearer-token roles.
+
+New crates: `mosaic-certify`, `mosaic-registry`, `mosaic-server`. CD-ready via `Dockerfile`.
+Deferred (honest scope): a CI `docker build` job (no local daemon to verify it), moderation
+audit-note storage, DSL-program registry submissions, and the web shell (roadmap point 4).
