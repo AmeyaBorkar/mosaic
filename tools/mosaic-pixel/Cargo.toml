@@ -1,0 +1,16 @@
+[package]
+name = "mosaic-pixel"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Demo tool: turn an image into colorful hexagonal pixel-art PNGs."
+publish = false
+
+[[bin]]
+name = "mosaic-pixel"
+path = "src/main.rs"
+
+# Standalone demo tool — excluded from the Mosaic workspace, so its image codec
+# dependency stays out of the production dependency graph. png-only to keep it small.
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }

@@ -17,7 +17,16 @@ members = [
 ]
 # Facets compile to wasm32 only (no_std, guest ABI), so they are excluded from the
 # native workspace build and built explicitly with --target wasm32-unknown-unknown.
-exclude = ["facets/ramp", "facets/spin", "facets/liar", "facets/structural", "facets/dither", "facets/interp"]
+exclude = [
+    "facets/ramp",
+    "facets/spin",
+    "facets/liar",
+    "facets/structural",
+    "facets/dither",
+    "facets/interp",
+    # Standalone demo tool with its own (native image-codec) dependency graph.
+    "tools/mosaic-pixel",
+]
 
 [workspace.package]
 edition = "2024"
