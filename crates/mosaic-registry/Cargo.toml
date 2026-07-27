@@ -11,3 +11,11 @@ publish = false
 mosaic-certify = { path = "../mosaic-certify" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The durable backend: a pure-Rust, embedded, ACID key-value store. No C toolchain and no
+# server process, so it compiles on every target and needs no infrastructure — the robust,
+# self-contained choice for a registry that must survive restarts.
+redb = "4.1.0"
+
+[dev-dependencies]
+# Isolated temp directories for the durable-store tests.
+tempfile = "3"

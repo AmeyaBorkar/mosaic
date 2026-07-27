@@ -16,8 +16,10 @@ use mosaic_certify::{AbiKind, Certificate};
 use serde::{Deserialize, Serialize};
 
 mod memory;
+mod redb_store;
 
 pub use memory::InMemoryStore;
+pub use redb_store::RedbStore;
 
 /// Moderation state of a Facet. A Facet is `Certified` the moment it is stored (publishing
 /// runs the gate), then a moderator moves it to `Published` or `Rejected`.
