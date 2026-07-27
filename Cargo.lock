@@ -959,6 +959,7 @@ dependencies = [
  "mosaic-runtime",
  "serde",
  "serde_json",
+ "sha2",
  "tessera-ascii",
  "tessera-spectral",
  "tokio",

@@ -10,15 +10,31 @@ use axum::response::Response;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use mosaic_runtime::Sandbox;
-use mosaic_server::{AppState, app};
+use mosaic_server::{AppState, AuthConfig, TokenEntry, app};
 use serde_json::Value;
 use tower::ServiceExt;
 
 const FACET_RAMP: &[u8] = include_bytes!("../../tessera-ascii/tests/facet_ramp.wasm");
 
+/// A test app with two principals: `author-token` (alice, author) and `mod-token`
+/// (max, author + moderator).
 fn test_app() -> axum::Router {
+    let auth = AuthConfig::from_entries(vec![
+        TokenEntry {
+            token: "author-token".to_string(),
+            id: "alice".to_string(),
+            roles: vec!["author".to_string()],
+        },
+        TokenEntry {
+            token: "mod-token".to_string(),
+            id: "max".to_string(),
+            roles: vec!["author".to_string(), "moderator".to_string()],
+        },
+    ])
+    .unwrap();
     app(AppState {
         sandbox: Arc::new(Sandbox::new().expect("sandbox")),
+        auth: Arc::new(auth),
     })
 }
 
@@ -166,4 +182,48 @@ async fn render_rejects_a_mismatched_image_size_with_400() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(resp).await["error"]["code"], "bad_request");
+}
+
+fn get_with_token(uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn whoami_requires_a_token() {
+    let resp = test_app()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/whoami")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json_body(resp).await["error"]["code"], "unauthorized");
+}
+
+#[tokio::test]
+async fn whoami_returns_identity_for_a_valid_token() {
+    let resp = test_app()
+        .oneshot(get_with_token("/v1/whoami", "author-token"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["id"], "alice");
+    assert_eq!(body["roles"], serde_json::json!(["author"]));
+}
+
+#[tokio::test]
+async fn whoami_rejects_an_unknown_token() {
+    let resp = test_app()
+        .oneshot(get_with_token("/v1/whoami", "not-a-real-token"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }

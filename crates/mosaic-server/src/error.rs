@@ -23,6 +23,13 @@ pub enum ApiError {
     RenderFailed(String),
     /// The requested resource does not exist — 404.
     NotFound(String),
+    /// Authentication is required or the presented credential is invalid — 401.
+    Unauthorized(String),
+    /// The caller is authenticated but lacks the required role — 403.
+    Forbidden(String),
+    /// The request conflicts with the resource's current state (e.g. moderating a Facet
+    /// that is not awaiting moderation) — 409.
+    Conflict(String),
     /// An internal failure (e.g. a worker task panicked) — 500. The message is generic;
     /// details are logged, not leaked.
     Internal(String),
@@ -39,6 +46,18 @@ impl ApiError {
 
     pub fn render_failed(message: impl Into<String>) -> Self {
         ApiError::RenderFailed(message.into())
+    }
+
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        ApiError::Unauthorized(message.into())
+    }
+
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        ApiError::Forbidden(message.into())
+    }
+
+    pub fn conflict(message: impl Into<String>) -> Self {
+        ApiError::Conflict(message.into())
     }
 
     pub fn internal(message: impl Into<String>) -> Self {
@@ -61,6 +80,9 @@ impl IntoResponse for ApiError {
                 m,
             ),
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, "not_found".to_string(), m),
+            ApiError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, "unauthorized".to_string(), m),
+            ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, "forbidden".to_string(), m),
+            ApiError::Conflict(m) => (StatusCode::CONFLICT, "conflict".to_string(), m),
             ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, "internal".to_string(), m),
         };
         (

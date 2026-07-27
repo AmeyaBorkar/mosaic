@@ -4,12 +4,16 @@
 use std::sync::Arc;
 
 use mosaic_runtime::Sandbox;
-use mosaic_server::{AppState, app};
+use mosaic_server::{AppState, AuthConfig, app};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let sandbox = Arc::new(Sandbox::new()?);
-    let router = app(AppState { sandbox });
+    // Tokens are configured out of band via MOSAIC_TOKENS (a JSON file kept out of the
+    // repo). Absent it, no bearer token authenticates — read-only public endpoints still work.
+    let auth = Arc::new(AuthConfig::from_env()?);
+    eprintln!("mosaic-server: {} principal(s) configured", auth.len());
+    let router = app(AppState { sandbox, auth });
 
     // Bind address is configurable; default to loopback so nothing is exposed by accident.
     let addr = std::env::var("MOSAIC_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());

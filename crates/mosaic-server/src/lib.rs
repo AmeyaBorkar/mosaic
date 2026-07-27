@@ -22,10 +22,13 @@ use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use mosaic_runtime::Sandbox;
 
+mod auth;
 mod certify;
 pub mod error;
 mod health;
 mod render;
+
+pub use auth::{AuthConfig, AuthedPrincipal, OptionalPrincipal, Principal, Role, TokenEntry};
 
 /// Maximum request body. An 8 MiB Facet base64-encodes to ~10.9 MiB, and raw-RGBA render
 /// inputs can be larger; 32 MiB is generous while still bounding per-request memory. Axum's
@@ -38,6 +41,8 @@ const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 pub struct AppState {
     /// The authoritative Facet host, shared across requests.
     pub sandbox: Arc<Sandbox>,
+    /// The bearer-token table (hashed) for authentication.
+    pub auth: Arc<AuthConfig>,
 }
 
 /// Build the application router from `state`. Separated from serving so tests can drive it
@@ -45,8 +50,15 @@ pub struct AppState {
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(health::healthz))
+        .route("/v1/whoami", get(whoami))
         .route("/v1/certify", post(certify::certify_handler))
         .route("/v1/render", post(render::render_handler))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
+}
+
+/// `GET /v1/whoami` — echo the authenticated principal's id and roles. Requires a valid
+/// bearer token; a quick way for a client to confirm its identity and capabilities.
+async fn whoami(AuthedPrincipal(principal): AuthedPrincipal) -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({ "id": principal.id, "roles": principal.role_slugs() }))
 }
