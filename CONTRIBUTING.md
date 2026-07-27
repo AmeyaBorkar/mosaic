@@ -25,29 +25,30 @@ and commands. In short:
 ```sh
 cargo test --workspace
 cargo clippy --all-targets --all-features -- -D warnings
-# browser bridge + JS tests:
+# browser bridge + JS tests (+ strict type-check):
 wasm-pack build crates/mosaic-wasm --target nodejs --dev --out-dir pkg
-node --test packages/facet-abi/test/*.test.ts crates/mosaic-wasm/test/pipeline.test.ts
+pnpm install && pnpm run typecheck && pnpm test
 ```
 
 ## Regenerating fixtures and goldens
 
-The guest Facet wasm files under `crates/tessera-ascii/tests/` and
-`packages/facet-abi/test/fixtures/` are committed test inputs. If you change a
-Facet's source, rebuild it and refresh the golden vectors, then commit the result:
+The guest Facet wasm files are committed test inputs, copied into several fixture
+directories under `crates/*/tests/` and `packages/facet-abi/test/fixtures/`. Both the
+placement and the goldens are script-driven, so do not hand-copy or hand-edit them. If you
+change a Facet's source, or a shared crate it links (`glyph-atlas`, `dither`, `mosaic-vm`),
+rebuild and refresh, then commit the result:
 
 ```sh
-# The RUSTFLAGS caps the Facet's linear memory at 16 MiB (browser parity with the
-# native sandbox cap); required for @mosaic/facet-abi to accept the module.
-RUSTFLAGS="-C link-arg=--max-memory=16777216" \
-  cargo build --manifest-path facets/<name>/Cargo.toml --target wasm32-unknown-unknown --release
-# copy the wasm into the fixture locations, then:
-cargo run -p mosaic-runtime --example emit_golden
-cargo run -p tessera-ascii  --example emit_render_golden
+# Builds every Facet from source with the 16 MiB --max-memory cap and copies each into
+# all of its committed fixture locations.
+bash scripts/build-facets.sh
+# Regenerates and verifies the five golden vectors.
+bash scripts/verify-fixtures.sh
 ```
 
-CI regenerates the goldens from source and fails if the committed copies are stale
-(`scripts/verify-fixtures.sh`).
+CI rebuilds every Facet from source and `git diff`s the committed `.wasm`, and regenerates
+the goldens and fails if either is stale — so a committed binary can never drift from its
+source.
 
 ## Commits and history
 
@@ -59,6 +60,6 @@ CI regenerates the goldens from source and fails if the committed copies are sta
 
 ## Architecture decisions
 
-Significant design choices are recorded as numbered decisions (D1–D9) in
+Significant design choices are recorded as numbered decisions (D1–D14) in
 [`docs/architecture.md`](./docs/architecture.md). If you change one or add a new
 one, update that document in the same change.

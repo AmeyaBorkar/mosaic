@@ -10,7 +10,7 @@ users run those methods on their own media, with a live in-browser preview that 
 
 See [`vision.md`](./vision.md) for the vision and
 [`docs/architecture.md`](./docs/architecture.md) for the architecture and every
-decision made so far (D1–D9).
+decision made so far (D1–D14).
 
 ## The three layers
 
@@ -74,7 +74,7 @@ The full pipeline is implemented and proven end-to-end, **native and browser**:
   (1-bit Floyd–Steinberg error-diffusion — the propagation/feedback class via the 2-D
   `run2d` ABI), plus `spin`/`liar` adversarial fixtures for the sandbox tests.
 
-**Verification:** 112 Rust tests + 29 JS tests, `clippy -D warnings` clean, with
+**Verification:** 127 Rust tests + 39 JS tests, `clippy -D warnings` clean, with
 adversarial sandbox tests, native≡wasm conformance sweeps for **both** engines
 (preview == render), a cross-domain proof that one Facet binary renders images and audio
 identically, a native≡browser proof that a cross-engine composed artifact is byte-identical,
@@ -124,18 +124,16 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all
 ```
 
-**Rebuild the guest Facet wasm fixtures** (only when a Facet's source changes):
+**Rebuild the guest Facet wasm fixtures and goldens** (only when a Facet's source, or a
+shared crate it links, changes):
 
 ```sh
-# RUSTFLAGS caps each Facet's linear memory at 16 MiB, so the browser enforces the
-# same ceiling the native sandbox does (a memory-bomb Facet cannot exceed it).
-for f in ramp spin liar structural; do
-  RUSTFLAGS="-C link-arg=--max-memory=16777216" \
-    cargo build --manifest-path "facets/$f/Cargo.toml" --target wasm32-unknown-unknown --release
-done
-# then copy the outputs into the fixture locations and refresh the goldens:
-cargo run -p mosaic-runtime --example emit_golden
-cargo run -p tessera-ascii  --example emit_render_golden
+# Builds every Facet (ramp, dither, structural, interp, spin, liar) from source with the
+# 16 MiB --max-memory cap and copies each into its committed fixture locations. CI runs
+# this and git-diffs the .wasm, so a committed binary can never drift from its source.
+bash scripts/build-facets.sh
+# Regenerate and verify all five golden vectors:
+bash scripts/verify-fixtures.sh
 ```
 
 **Browser bridge + JS tests**
@@ -143,11 +141,9 @@ cargo run -p tessera-ascii  --example emit_render_golden
 ```sh
 cargo install wasm-pack
 wasm-pack build crates/mosaic-wasm --target nodejs --dev --out-dir pkg
-node --test \
-  packages/facet-abi/test/conformance.test.ts \
-  packages/facet-abi/test/adversarial.test.ts \
-  packages/facet-abi/test/timeout.test.ts \
-  crates/mosaic-wasm/test/pipeline.test.ts
+pnpm install          # typescript + @types/node for the type-check
+pnpm run typecheck    # tsc --noEmit, strict
+pnpm test             # all eight node --test suites
 ```
 
 ## Security

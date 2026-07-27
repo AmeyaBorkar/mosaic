@@ -49,13 +49,16 @@ drift. Rust also hosts the runtime, metering, and the future Facet compiler.
 **TypeScript** (Next.js + pnpm) owns the editor, the auto-generated controls,
 live preview, and the registry.
 
-### D3 — Facet authoring: bootstrap now, custom DSL later *(settled)*
+### D3 — Facet authoring: bootstrap now, custom DSL later *(settled — realized by D14)*
 Because the WASM substrate is permanent, the author-facing language is a
-swappable compiler frontend. We **bootstrap** Facets in AssemblyScript
-(TS-like → WASM) to validate the Tessera contract against real methods, then
-design the purpose-built **Facet DSL** from that evidence. Rationale: the right
-language cannot be designed before the contract it describes is proven; freezing
-it early would bake in the wrong abstraction.
+swappable compiler frontend. We **bootstrapped** Facets as hand-written `no_std`
+Rust → WASM (`facets/ramp`, `dither`, `structural`) to validate the Tessera
+contract against real methods, then designed the purpose-built **Facet DSL** from
+that evidence — now shipped as **D14** (`mosaic-dsl` → validated bytecode, run by one
+interpreter Facet). Rationale: the right language cannot be designed before the
+contract it describes is proven; freezing it early would bake in the wrong
+abstraction. (An earlier draft named AssemblyScript for the bootstrap; `no_std` Rust
+was used instead, keeping one toolchain and the same determinism discipline.)
 
 ### D4 — Windows toolchain: rustup `stable-msvc` + VS Build Tools *(settled)*
 MSVC host toolchain — the most compatible on Windows. WASM builds need no native
@@ -221,8 +224,11 @@ diffusion) need neighbour positions, so a propagation Facet instead exports
 **additive** — gather Facets are unchanged — and both hosts share the *same*
 marshalling as the gather ABI (bounds/overflow checks, zero imports, memory cap), so
 the propagation path inherits every sandbox guarantee. A Facet declares which ABI it
-implements by which entry point it exports; the host requires exactly one of
-`run`/`run2d` to be present.
+implements by which entry point it exports; each host looks up the entry point the
+caller asks for (`run` for the gather ABI, `run2d` for propagation, and — with D14 —
+`run` plus `load_program` for the DSL interpreter) at call time. There is no admission
+check that *exactly one* is present; a caller selects the ABI by which `run_map` /
+`run_map_2d` / `run_program` entry point it invokes.
 
 ### D11 — Second engine `tessera-spectral`; composition is a substrate primitive *(settled — O5)*
 The platform's load-bearing claim is that the five-slot contract (D5/D6) is
@@ -344,11 +350,11 @@ facets/structural/ # L2 Facet: sub-cell patch -> nearest atlas glyph
 facets/dither/     # propagation Facet: 1-bit error-diffusion dithering (run2d)
 facets/interp/     # DSL interpreter Facet: runs mosaic-vm bytecode in the sandbox (O3)
 packages/
-  facet-abi/       # browser Facet host: mirrors run_map, timeout-Worker sandbox
+  facet-abi/       # browser Facet host: mirrors run_map/run_map_2d/run_program, timeout-Worker sandbox
 docs/              # this document and future design notes
 ```
 
 ## Undecided housekeeping
 
-- **License.** Not yet chosen; matters for a platform hosting community-authored
-  content. Tracked as an explicit open item before first publish.
+- **License.** Settled: dual MIT OR Apache-2.0 (see `LICENSE-MIT`, `LICENSE-APACHE`,
+  and the README contribution clause).

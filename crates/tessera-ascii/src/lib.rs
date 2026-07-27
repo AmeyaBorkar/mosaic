@@ -3,20 +3,23 @@
 //! Mosaic's first **Tessera**: images → ASCII text.
 //!
 //! Vertical slice proving the pipeline end-to-end and validating the
-//! [`mosaic_core`] contract against a real domain (O5):
+//! [`mosaic_core`] contract against a real domain (the first engine; contract
+//! *universality* across domains is O5, proven by `tessera-spectral`):
 //!
 //! ```text
-//! RGBA buffer → grid of cells → features (L0 luminance, L1 gradient) → map → text
+//! RGBA buffer → grid of cells → features (L0 luminance, L1 gradient, L2 structure) → map → text
 //! ```
 //!
 //! - **L0** — per-cell mean luminance → a density ramp.
 //! - **L1** — a Sobel gradient over the cell luminance grid (each cell reading its
 //!   8 neighbors: a **radius-1 gather**, the first concrete exercise of decision
 //!   D5/O1) → directional glyphs (`- / | \`) on strong edges.
+//! - **L2** — sub-cell structural matching ([`render_structural`] / `feature::extract_structural`),
+//!   each cell reduced to a luminance patch and matched to the closest glyph via the shared
+//!   [`glyph_atlas`]. The propagation `render_dither` path (D5) is implemented here too.
 //!
 //! The vocabulary is declared as a [`mosaic_core::feature::FeatureSchema`] and
-//! features are laid out in that schema's buffer, so adding L2 (sub-cell
-//! structure) is additive. The Facet's parameters are a
+//! features are laid out in that schema's buffer, so L2 was added additively. The Facet's parameters are a
 //! [`mosaic_core::manifest::Manifest`] ([`render::manifest`]), exercising the
 //! auto-generated-controls surface.
 //!

@@ -36,9 +36,10 @@
 //! The extractor uses the same discipline as [`tessera_ascii`]: every transcendental
 //! goes through `libm` (`cosf` for the window and band coefficients, `powf` for the
 //! band centers) and no `mul_add` is used, so the STFT is bit-reproducible and ready
-//! for the native ↔ wasm parity path. (Browser bindings + a native/wasm golden for
-//! *this* extractor are a follow-on, mirroring the ASCII engine; the cross-domain
-//! Facet proof below needs only the native engine plus the real sandbox.)
+//! for the native ↔ wasm parity path. Browser bindings
+//! (`mosaic_wasm::extract_spectral_features`) and a native↔wasm golden
+//! (`crates/mosaic-wasm/test/spectral.test.ts`) now prove that parity for this extractor,
+//! mirroring the ASCII engine.
 //!
 //! Pure, `#![forbid(unsafe_code)]`, and no panics on malformed input (overflow-checked
 //! sizing, budget-gated allocation).
