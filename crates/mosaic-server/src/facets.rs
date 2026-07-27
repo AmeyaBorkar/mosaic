@@ -13,7 +13,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use mosaic_certify::{CertifyOutcome, certify};
@@ -98,17 +98,45 @@ pub async fn publish(
     Ok((StatusCode::CREATED, Json(FacetEnvelope { facet: record })))
 }
 
-/// `GET /v1/facets` — public listing of published Facets, newest first.
-pub async fn list(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+/// Query for `GET /v1/facets`.
+#[derive(Deserialize)]
+pub struct ListQuery {
+    /// Restrict to a moderation state. Omitted (or `published`) is the public view; any
+    /// other state is the moderator queue and requires the moderator role.
+    state: Option<String>,
+}
+
+/// `GET /v1/facets` — list Facets, newest first. Public callers see `Published`; a moderator
+/// may pass `?state=certified` (or `rejected`) to review the queue.
+pub async fn list(
+    State(state): State<AppState>,
+    OptionalPrincipal(principal): OptionalPrincipal,
+    Query(query): Query<ListQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let want = match query.state.as_deref() {
+        None | Some("published") => FacetState::Published,
+        Some(other) => {
+            let parsed = FacetState::parse(other)
+                .ok_or_else(|| ApiError::bad_request(format!("unknown state {other:?}")))?;
+            // Anything but the public Published view requires a moderator.
+            let is_moderator = principal
+                .as_ref()
+                .is_some_and(|p| p.has_role(Role::Moderator));
+            if !is_moderator {
+                return Err(ApiError::forbidden(
+                    "listing non-published Facets requires the moderator role",
+                ));
+            }
+            parsed
+        }
+    };
+
     let registry = state.registry.clone();
-    let facets = tokio::task::spawn_blocking(move || {
-        registry.list(&ListFilter {
-            state: Some(FacetState::Published),
-        })
-    })
-    .await
-    .map_err(|e| ApiError::internal(format!("registry worker failed: {e}")))?
-    .map_err(store_error)?;
+    let facets =
+        tokio::task::spawn_blocking(move || registry.list(&ListFilter { state: Some(want) }))
+            .await
+            .map_err(|e| ApiError::internal(format!("registry worker failed: {e}")))?
+            .map_err(store_error)?;
     Ok(Json(json!({ "facets": facets })))
 }
 
@@ -140,6 +168,57 @@ pub async fn get_wasm(
         .ok_or_else(|| ApiError::not_found("no such facet"))?;
 
     Ok(([(header::CONTENT_TYPE, "application/wasm")], bytes).into_response())
+}
+
+/// Request body for `POST /v1/facets/{id}/moderate`.
+#[derive(Deserialize)]
+pub struct ModerateRequest {
+    decision: ModerateDecision,
+}
+
+/// A moderator's decision.
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ModerateDecision {
+    Publish,
+    Reject,
+}
+
+/// `POST /v1/facets/{id}/moderate` — approve or reject a certified Facet (moderator only).
+/// The only valid transition is `Certified -> Published | Rejected`; moderating a Facet in
+/// any other state is a 409, and an unknown id is a 404.
+pub async fn moderate(
+    State(state): State<AppState>,
+    AuthedPrincipal(principal): AuthedPrincipal,
+    Path(id): Path<String>,
+    Json(req): Json<ModerateRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    principal.require(Role::Moderator)?;
+
+    let mut record = load(&state, id.clone()).await?;
+    if record.state != FacetState::Certified {
+        return Err(ApiError::conflict(format!(
+            "Facet is '{}'; only a certified Facet awaiting moderation can be moderated",
+            record.state.as_str()
+        )));
+    }
+    let new_state = match req.decision {
+        ModerateDecision::Publish => FacetState::Published,
+        ModerateDecision::Reject => FacetState::Rejected,
+    };
+
+    let registry = state.registry.clone();
+    let id_for_set = id.clone();
+    let found = tokio::task::spawn_blocking(move || registry.set_state(&id_for_set, new_state))
+        .await
+        .map_err(|e| ApiError::internal(format!("registry worker failed: {e}")))?
+        .map_err(store_error)?;
+    if !found {
+        // Raced with a delete between load and set — treat as gone.
+        return Err(ApiError::not_found("no such facet"));
+    }
+    record.state = new_state;
+    Ok(Json(FacetEnvelope { facet: record }))
 }
 
 /// Load a record by id (on a blocking worker), 404 if absent.

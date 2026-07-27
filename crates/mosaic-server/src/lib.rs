@@ -63,6 +63,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/facets", get(facets::list).post(facets::publish))
         .route("/v1/facets/{id}", get(facets::get_facet))
         .route("/v1/facets/{id}/wasm", get(facets::get_wasm))
+        .route("/v1/facets/{id}/moderate", post(facets::moderate))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }

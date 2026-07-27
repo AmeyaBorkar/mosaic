@@ -366,3 +366,104 @@ async fn get_unknown_facet_is_404() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+async fn moderate(app: &axum::Router, id: &str, decision: &str, token: &str) -> Response {
+    let body = serde_json::json!({ "decision": decision });
+    app.clone()
+        .oneshot(post_json_auth(
+            &format!("/v1/facets/{id}/moderate"),
+            body,
+            token,
+        ))
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn moderator_publishes_a_certified_facet() {
+    let app = test_app();
+    let created = json_body(publish_ramp(&app, "author-token", "Approve Me").await).await;
+    let id = created["facet"]["id"].as_str().unwrap().to_string();
+
+    let resp = moderate(&app, &id, "publish", "mod-token").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(json_body(resp).await["facet"]["state"], "published");
+
+    // Now the public listing includes it.
+    let list = Request::builder()
+        .uri("/v1/facets")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(list).await.unwrap();
+    let facets = json_body(resp).await;
+    assert_eq!(facets["facets"].as_array().unwrap().len(), 1);
+    assert_eq!(facets["facets"][0]["id"], id);
+
+    // And an anonymous fetch by id now succeeds.
+    let anon = Request::builder()
+        .uri(format!("/v1/facets/{id}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(anon).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn moderation_requires_the_moderator_role() {
+    let app = test_app();
+    let created = json_body(publish_ramp(&app, "author-token", "X").await).await;
+    let id = created["facet"]["id"].as_str().unwrap().to_string();
+    let resp = moderate(&app, &id, "publish", "author-token").await; // author is not a moderator
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn moderating_a_non_certified_facet_is_a_conflict() {
+    let app = test_app();
+    let created = json_body(publish_ramp(&app, "author-token", "X").await).await;
+    let id = created["facet"]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        moderate(&app, &id, "publish", "mod-token").await.status(),
+        StatusCode::OK
+    );
+    // Already published: moderating again is a 409.
+    let resp = moderate(&app, &id, "reject", "mod-token").await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(resp).await["error"]["code"], "conflict");
+}
+
+#[tokio::test]
+async fn moderating_an_unknown_facet_is_404() {
+    let app = test_app();
+    let resp = moderate(&app, "does-not-exist", "publish", "mod-token").await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn moderator_queue_is_gated_and_reject_works() {
+    let app = test_app();
+    json_body(publish_ramp(&app, "author-token", "Queued").await).await;
+
+    // A moderator sees the certified queue.
+    let resp = app
+        .clone()
+        .oneshot(get_with_token("/v1/facets?state=certified", "mod-token"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(json_body(resp).await["facets"].as_array().unwrap().len(), 1);
+
+    // A non-moderator cannot use the queue.
+    let resp = app
+        .clone()
+        .oneshot(get_with_token("/v1/facets?state=certified", "author-token"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // Reject transitions to rejected.
+    let created = json_body(publish_ramp(&app, "author-token", "Rejectee").await).await;
+    let id = created["facet"]["id"].as_str().unwrap().to_string();
+    let resp = moderate(&app, &id, "reject", "mod-token").await;
+    assert_eq!(json_body(resp).await["facet"]["state"], "rejected");
+}
