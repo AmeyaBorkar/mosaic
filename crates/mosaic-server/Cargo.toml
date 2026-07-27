@@ -1,0 +1,26 @@
+[package]
+name = "mosaic-server"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Mosaic's authoritative HTTP service: certify, render, and (later) the Facet registry."
+publish = false
+
+[dependencies]
+# HTTP framework + async runtime. Minimal tokio feature set for a server; graceful shutdown
+# needs `signal`, spawn_blocking (CPU-bound wasmtime/SQLite work) is in the `rt` features.
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+# The authoritative gate + host. certify runs here; render runs Facets through the sandbox.
+mosaic-certify = { path = "../mosaic-certify" }
+mosaic-runtime = { path = "../mosaic-runtime" }
+# Request/response DTOs and the error envelope.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Facet wasm and image/PCM inputs cross the JSON boundary base64-encoded.
+base64 = "0.22"
+anyhow = "1"
+
+[dev-dependencies]
+# Drive the router in-process (ServiceExt::oneshot) — HTTP tests with no sockets.
+tower = { version = "0.5", features = ["util"] }
