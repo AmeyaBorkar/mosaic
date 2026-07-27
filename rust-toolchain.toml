@@ -1,5 +1,8 @@
-# Pins the toolchain so every machine builds Mosaic identically.
+# Pins the toolchain so every machine builds Mosaic identically. A floating "stable"
+# is not a pin: rustc/LLVM codegen and the clippy lint set change under it, which would
+# silently alter the committed .wasm fixtures and, with `clippy -D warnings`,
+# retroactively fail already-green commits (audit H4). Bump this deliberately.
 [toolchain]
-channel = "stable"
+channel = "1.97.1"
 components = ["rustfmt", "clippy"]
 targets = ["wasm32-unknown-unknown"]
