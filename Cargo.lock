@@ -715,7 +715,10 @@ dependencies = [
 name = "mosaic-certify"
 version = "0.0.0"
 dependencies = [
+ "mosaic-runtime",
  "serde",
+ "serde_json",
+ "sha2",
  "wasmparser 0.252.0",
  "wat",
 ]

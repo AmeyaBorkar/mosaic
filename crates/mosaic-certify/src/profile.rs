@@ -140,7 +140,7 @@ pub struct Rejection {
 }
 
 impl Rejection {
-    fn new(code: RejectionCode, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: RejectionCode, message: impl Into<String>) -> Self {
         Rejection {
             code,
             message: message.into(),
