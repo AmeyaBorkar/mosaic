@@ -924,6 +924,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mosaic-registry"
+version = "0.0.0"
+dependencies = [
+ "mosaic-certify",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mosaic-runtime"
 version = "0.0.0"
 dependencies = [
