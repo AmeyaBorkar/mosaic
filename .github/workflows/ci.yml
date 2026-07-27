@@ -49,6 +49,21 @@ jobs:
       - name: Engine + bridge + VM compile to wasm32 (browser / Facet target)
         run: cargo build --locked -p glyph-atlas -p tessera-ascii -p mosaic-vm -p mosaic-wasm --target wasm32-unknown-unknown
 
+      - name: Facets — fmt, clippy, and committed .wasm matches source
+        run: |
+          for f in ramp dither structural interp liar spin; do
+            cargo fmt --manifest-path "facets/$f/Cargo.toml" -- --check
+            # No --all-targets: it pulls in the test harness, whose std panic handler
+            # collides with each no_std Facet's #[panic_handler]. Lint the guest lib.
+            cargo clippy --locked --manifest-path "facets/$f/Cargo.toml" \
+              --target wasm32-unknown-unknown -- -D warnings
+          done
+          bash scripts/build-facets.sh
+          if ! git diff --exit-code -- '*.wasm'; then
+            echo "::error::A committed Facet .wasm does not match facets/*/src. Run scripts/build-facets.sh and commit the result." >&2
+            exit 1
+          fi
+
       - name: Golden vectors are fresh
         run: bash scripts/verify-fixtures.sh
 
