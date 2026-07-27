@@ -25,6 +25,12 @@
 use mosaic_core::composite::{Blend, Canvas, Layer};
 use serde::{Deserialize, Serialize};
 
+/// Upper bound on layers in one Composition. Each layer runs a full engine
+/// extraction + a sandboxed Facet in the host resolver, so an unbounded stack turns
+/// a tiny JSON into arbitrarily much work (per-run fuel/epoch bounds each execution,
+/// not their number). 256 is far beyond any real composition.
+pub const MAX_LAYERS: usize = 256;
+
 /// A declarative composition: a canvas and an ordered stack of layers (painter's order,
 /// first drawn first / bottom-most). Serializes to JSON as the shareable artifact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -142,6 +148,8 @@ pub enum RenderError {
     CoverageSizeMismatch { expected: usize, got: usize },
     /// The host resolver failed (unknown engine/facet/input, bad params, …).
     Resolve(String),
+    /// The composition declared more than [`MAX_LAYERS`] layers.
+    TooManyLayers { count: usize, max: usize },
 }
 
 impl core::fmt::Display for RenderError {
@@ -158,6 +166,12 @@ impl core::fmt::Display for RenderError {
                 write!(f, "explicit coverage has {got} cells, expected {expected}")
             }
             RenderError::Resolve(msg) => write!(f, "layer resolve failed: {msg}"),
+            RenderError::TooManyLayers { count, max } => {
+                write!(
+                    f,
+                    "composition has {count} layers, exceeding the maximum of {max}"
+                )
+            }
         }
     }
 }
@@ -179,6 +193,14 @@ impl Composition {
 /// Render a [`Composition`] to text: resolve each layer through `resolver`, composite the
 /// stack (painter's order) via the O4 primitive, and compose to validated text.
 pub fn render(comp: &Composition, resolver: &mut dyn LayerResolver) -> Result<String, RenderError> {
+    // Bound the resolve work before doing any of it: each layer runs an engine + a
+    // sandboxed Facet, so an unbounded stack is a small-input/large-work DoS. Audit M12.
+    if comp.layers.len() > MAX_LAYERS {
+        return Err(RenderError::TooManyLayers {
+            count: comp.layers.len(),
+            max: MAX_LAYERS,
+        });
+    }
     let mut canvas =
         Canvas::new(comp.canvas.cols, comp.canvas.rows).map_err(RenderError::Compose)?;
     for decl in &comp.layers {
@@ -360,6 +382,22 @@ mod tests {
         assert!(matches!(
             render(&comp, &mut MockResolver),
             Err(RenderError::Resolve(_))
+        ));
+    }
+
+    #[test]
+    fn too_many_layers_is_rejected() {
+        let layers: Vec<LayerDecl> = (0..MAX_LAYERS + 1)
+            .map(|_| layer("fill_a", BlendSpec::Over, CoverageMode::Opaque))
+            .collect();
+        let comp = Composition {
+            canvas: CanvasSpec { cols: 3, rows: 1 },
+            background: SP,
+            layers,
+        };
+        assert!(matches!(
+            render(&comp, &mut MockResolver),
+            Err(RenderError::TooManyLayers { .. })
         ));
     }
 
