@@ -128,6 +128,11 @@ impl Sandbox {
         // disabling multi-memory keeps a module to a single linear memory.
         config.wasm_threads(false);
         config.wasm_multi_memory(false);
+        // wasmtime 47 enables memory64 by default (it is in the WASM3 feature set,
+        // despite the stale `wasm_memory64` doc comment), so a 64-bit linear memory
+        // would otherwise be accepted. A pure per-cell Facet never needs it, and the
+        // browser mirror cannot parse 64-bit limits, so disable it for parity.
+        config.wasm_memory64(false);
         let engine = Engine::new(&config)?;
 
         // Advance the epoch once per tick from a dedicated thread. `Engine` is a
@@ -832,6 +837,21 @@ mod tests {
     fn map_contains_table_bomb() {
         // An oversized table must be denied at instantiation, never allocated.
         expect_map_err(TABLE_BOMB_WAT);
+    }
+
+    /// A 64-bit linear memory: accepted by wasmtime's default feature set, so the
+    /// sandbox must reject it explicitly (audit H2).
+    const MEMORY64_WAT: &str = r#"
+        (module (memory i64 1 1))
+    "#;
+
+    #[test]
+    fn memory64_facet_is_rejected() {
+        let sb = Sandbox::new().unwrap();
+        assert!(
+            sb.compile(MEMORY64_WAT).is_err(),
+            "a 64-bit linear memory must be rejected (wasm_memory64 disabled)"
+        );
     }
 
     #[test]
