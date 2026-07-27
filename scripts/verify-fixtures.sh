@@ -13,9 +13,11 @@ cargo run --quiet --locked -p mosaic-runtime   --example emit_golden
 cargo run --quiet --locked -p tessera-ascii    --example emit_render_golden
 cargo run --quiet --locked -p tessera-spectral --example emit_spectral_golden
 cargo run --quiet --locked -p mosaic-wasm      --example emit_composite_golden
+cargo run --quiet --locked -p mosaic-runtime   --example emit_dsl_golden
 
 if ! git diff --exit-code -- \
     packages/facet-abi/test/golden.json \
+    packages/facet-abi/test/dsl_golden.json \
     crates/mosaic-wasm/test/render_golden.json \
     crates/mosaic-wasm/test/spectral_golden.json \
     crates/mosaic-wasm/test/composite_golden.json; then

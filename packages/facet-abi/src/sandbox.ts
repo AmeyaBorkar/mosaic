@@ -116,3 +116,34 @@ export function runFacetSandboxed2d(
     timeoutMs,
   );
 }
+
+/**
+ * Run a **programmable** (DSL bytecode) Facet in a sandboxed Worker under a wall-clock
+ * timeout: load `program` into the interpreter, then run it over `features`. DSL-authored
+ * Facets previously had no browser path at all (the interpreter trapped with no program
+ * loaded), so preview == render did not extend to them. Audit M4.
+ */
+export function runFacetProgramSandboxed(
+  facetBytes: Uint8Array,
+  program: Uint8Array,
+  features: Float32Array,
+  ncells: number,
+  stride: number,
+  options?: SandboxOptions,
+): Promise<Uint32Array> {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const ownedFeat = features.slice();
+  const ownedProg = program.slice();
+  return runInWorker(
+    {
+      kind: "program",
+      facetBytes,
+      program: ownedProg,
+      features: ownedFeat.buffer,
+      ncells,
+      stride,
+    },
+    [ownedFeat.buffer],
+    timeoutMs,
+  );
+}

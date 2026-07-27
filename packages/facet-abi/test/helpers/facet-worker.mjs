@@ -3,13 +3,19 @@
 // never returns and the parent must terminate the worker (see timeout.test.ts).
 
 import { parentPort } from "node:worker_threads";
-import { compileFacet, runFacetMap, runFacetMap2d } from "../../src/host.ts";
+import {
+  compileFacet,
+  runFacetMap,
+  runFacetMap2d,
+  runFacetProgram,
+} from "../../src/host.ts";
 
 if (parentPort === null) {
   throw new Error("facet-worker must run as a worker thread");
 }
 
-// Mirrors src/worker.ts: dispatch the gather (`map`) and propagation (`map2d`) ABIs.
+// Mirrors src/worker.ts: dispatch the gather (`map`), propagation (`map2d`), and DSL
+// (`program`) ABIs.
 parentPort.on("message", async (msg) => {
   try {
     const module = await compileFacet(msg.facetBytes);
@@ -17,7 +23,9 @@ parentPort.on("message", async (msg) => {
     const tokens =
       msg.kind === "map2d"
         ? runFacetMap2d(module, features, msg.cols, msg.rows, msg.stride)
-        : runFacetMap(module, features, msg.ncells, msg.stride);
+        : msg.kind === "program"
+          ? runFacetProgram(module, msg.program, features, msg.ncells, msg.stride)
+          : runFacetMap(module, features, msg.ncells, msg.stride);
     parentPort.postMessage({ ok: true, tokens: Array.from(tokens) });
   } catch (e) {
     parentPort.postMessage({

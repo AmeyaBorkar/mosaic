@@ -5,17 +5,24 @@
 // `runFacetMap`, then posts the tokens back (transferring the buffer).
 
 /// <reference lib="webworker" />
-import { compileFacet, runFacetMap, runFacetMap2d } from "./host.ts";
+import {
+  compileFacet,
+  runFacetMap,
+  runFacetMap2d,
+  runFacetProgram,
+} from "./host.ts";
 
 interface WorkerRequest {
-  kind: "map" | "map2d";
+  kind: "map" | "map2d" | "program";
   facetBytes: Uint8Array;
   features: ArrayBuffer;
-  // Present for kind "map".
+  // Present for kind "map" and "program".
   ncells?: number;
   // Present for kind "map2d".
   cols?: number;
   rows?: number;
+  // Present for kind "program".
+  program?: Uint8Array;
   stride: number;
 }
 
@@ -27,7 +34,9 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
     const tokens =
       msg.kind === "map2d"
         ? runFacetMap2d(module, features, msg.cols!, msg.rows!, msg.stride)
-        : runFacetMap(module, features, msg.ncells!, msg.stride);
+        : msg.kind === "program"
+          ? runFacetProgram(module, msg.program!, features, msg.ncells!, msg.stride)
+          : runFacetMap(module, features, msg.ncells!, msg.stride);
     (self as DedicatedWorkerGlobalScope).postMessage(
       { ok: true, tokens: tokens.buffer },
       [tokens.buffer],

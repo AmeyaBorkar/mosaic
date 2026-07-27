@@ -436,6 +436,95 @@ export function runFacetMap2d(
   return readTokensLE(memory, outPtr, ncells);
 }
 
+interface ProgramFacetExports {
+  memory: WebAssembly.Memory;
+  alloc: (size: number) => number;
+  load_program: (ptr: number, len: number) => number;
+  run: (inPtr: number, outPtr: number, ncells: number, stride: number) => void;
+}
+
+/**
+ * Run a **programmable** Facet — the DSL bytecode interpreter (O3). Loads a validated
+ * bytecode `program` into the guest via its `load_program(ptr, len) -> i32` export
+ * (which must return `0`), then runs the standard gather ABI over `features`. The
+ * browser mirror of `mosaic-runtime::Sandbox::run_program`, so a DSL-authored Facet
+ * previews identically to the way the server renders it. The guest re-validates the
+ * program, so a malformed or rejected program is a `FacetAbiError`, never a bad read.
+ */
+export function runFacetProgram(
+  module: WebAssembly.Module,
+  program: Uint8Array,
+  features: Float32Array,
+  ncells: number,
+  stride: number,
+): Uint32Array {
+  if (!Number.isInteger(stride) || stride <= 0) {
+    throw new FacetAbiError("stride must be a positive integer");
+  }
+  if (stride > 0x7fff_ffff) {
+    throw new FacetAbiError("stride exceeds the i32 range");
+  }
+  if (!Number.isInteger(ncells) || ncells < 0 || ncells > 0x7fff_ffff) {
+    throw new FacetAbiError("ncells must be a non-negative i32");
+  }
+  const expected = ncells * stride;
+  if (features.length !== expected) {
+    throw new FacetAbiError(
+      `features length ${features.length} != ncells * stride (${expected})`,
+    );
+  }
+  const inByteLen = checkedWasmByteLen(features.length, FEATURE_BYTES);
+  const outByteLen = checkedWasmByteLen(ncells, TOKEN_BYTES);
+  const progByteLen = checkedWasmByteLen(program.length, 1);
+
+  let instance: WebAssembly.Instance;
+  try {
+    instance = new WebAssembly.Instance(module, {});
+  } catch (e) {
+    throw new FacetAbiError(`Facet failed to instantiate: ${messageOf(e)}`);
+  }
+  const exports = instance.exports as Partial<ProgramFacetExports>;
+  const { memory, alloc, load_program, run } = exports;
+  if (
+    !(memory instanceof WebAssembly.Memory) ||
+    typeof alloc !== "function" ||
+    typeof load_program !== "function" ||
+    typeof run !== "function"
+  ) {
+    throw new FacetAbiError(
+      "Facet instance is missing required exports (memory, alloc, load_program, run)",
+    );
+  }
+  if (alloc.length !== 1 || load_program.length !== 2 || run.length !== 4) {
+    throw new FacetAbiError(
+      `Facet export arity is wrong: alloc/${alloc.length} load_program/${load_program.length} run/${run.length} (expected 1/2/4)`,
+    );
+  }
+
+  // Load the program first (mirrors run_program's setup), then the gather flow.
+  const progPtr = callGuest("alloc", () => alloc(progByteLen));
+  writeBytes(memory, progPtr, program);
+  const status = callGuest("load_program", () => load_program(progPtr, progByteLen));
+  if (status !== 0) {
+    throw new FacetAbiError(
+      `Facet rejected the bytecode program (load_program returned ${status})`,
+    );
+  }
+
+  const inPtr = callGuest("alloc", () => alloc(inByteLen));
+  writeFeaturesLE(memory, inPtr, features);
+  const outPtr = callGuest("alloc", () => alloc(outByteLen));
+  ensureRange(memory, outPtr, outByteLen);
+  callGuest("run", () => run(inPtr, outPtr, ncells, stride));
+  return readTokensLE(memory, outPtr, ncells);
+}
+
+/** Write raw `bytes` at `ptr`, bounds-checked (for the DSL program blob). */
+function writeBytes(memory: WebAssembly.Memory, ptr: number, bytes: Uint8Array): void {
+  ensureRange(memory, ptr, bytes.length);
+  new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
+}
+
 /** Write `features` as little-endian `f32` at `ptr`, bounds-checked. */
 function writeFeaturesLE(
   memory: WebAssembly.Memory,
