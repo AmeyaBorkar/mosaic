@@ -462,15 +462,20 @@ pub mod composite {
         /// clipping to the canvas bounds. Offsets may be negative or push the layer partly
         /// off-canvas; only in-bounds cells are affected.
         pub fn place(&mut self, layer: &Layer, row_off: i32, col_off: i32, blend: Blend) {
-            let canvas_cols = self.cols as i32;
-            let canvas_rows = self.rows as i32;
+            // Widen to i64 so a large untrusted offset (row_off/col_off come straight
+            // from Composition JSON) cannot overflow the add: overflow-checked builds
+            // (dev/test, wasm-pack --dev) would panic and release would wrap, so the
+            // two hosts disagreed on the failure mode. Every in-bounds coordinate fits
+            // back into the u32 grid, so the later `as usize` casts stay exact.
+            let canvas_cols = self.cols as i64;
+            let canvas_rows = self.rows as i64;
             for lr in 0..layer.rows {
-                let cr = lr as i32 + row_off;
+                let cr = lr as i64 + row_off as i64;
                 if cr < 0 || cr >= canvas_rows {
                     continue;
                 }
                 for lc in 0..layer.cols {
-                    let cc = lc as i32 + col_off;
+                    let cc = lc as i64 + col_off as i64;
                     if cc < 0 || cc >= canvas_cols {
                         continue;
                     }
@@ -596,6 +601,18 @@ pub mod composite {
             c2.place(&layer, -5, 0, Blend::Over);
             c2.place(&layer, 0, 9, Blend::Over);
             assert_eq!(c2.into_text(SP), "   \n   \n   ");
+        }
+
+        #[test]
+        fn place_extreme_offset_does_not_overflow() {
+            // Offsets come from untrusted Composition JSON; an extreme offset on a
+            // multi-cell layer must clip cleanly, not overflow the coordinate add
+            // (which panics under overflow-checks / wasm-pack --dev). Audit M7.
+            let layer = Layer::opaque(2, 2, vec![A, A, A, A]).unwrap();
+            let mut c = Canvas::new(3, 3).unwrap();
+            c.place(&layer, i32::MAX, i32::MAX, Blend::Over);
+            c.place(&layer, i32::MIN, i32::MIN, Blend::Over);
+            assert_eq!(c.into_text(SP), "   \n   \n   ");
         }
 
         #[test]
