@@ -32,6 +32,11 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
 use anyhow::{Result, anyhow};
 use wasmtime::{Config, Engine, Instance, Module, Store, StoreLimits, StoreLimitsBuilder};
 
@@ -43,6 +48,12 @@ const MAX_TABLE_ELEMENTS: usize = 10_000;
 /// compilation cost before Cranelift ever sees the module.
 const MAX_MODULE_BYTES: usize = 8 * 1024 * 1024;
 
+/// Ticker granularity for the epoch clock: a background thread advances the
+/// engine epoch once per interval, and each execution's wall-clock deadline is
+/// expressed in these ticks. Fine enough for a tight bound, coarse enough that
+/// the ticker itself is negligible.
+const EPOCH_TICK_MS: u64 = 10;
+
 /// Resource bounds for a single Facet execution.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
@@ -50,6 +61,12 @@ pub struct Limits {
     pub fuel: u64,
     /// Maximum linear memory the module may allocate, in bytes.
     pub max_memory_bytes: usize,
+    /// Wall-clock ceiling, in milliseconds. Fuel bounds *logic* but charges a
+    /// single unit for O(n) bulk-memory ops (`memory.fill`/`copy`/`init`), so a
+    /// fuel-metered loop of them can burn unbounded wall-clock; this epoch-based
+    /// deadline is the time backstop the authoritative host needs (the browser's
+    /// analogue is its Worker terminate). Rounded up to whole [`EPOCH_TICK_MS`].
+    pub wall_clock_ms: u64,
 }
 
 impl Default for Limits {
@@ -57,6 +74,9 @@ impl Default for Limits {
         Limits {
             fuel: 100_000_000,
             max_memory_bytes: 16 * 1024 * 1024,
+            // Generous vs. any legitimate render (which fuel already bounds to
+            // well under a second) while capping a runaway bulk-memory loop.
+            wall_clock_ms: 5_000,
         }
     }
 }
@@ -69,17 +89,36 @@ struct HostState {
 
 /// A sandbox for compiling and executing pure, untrusted Facet modules.
 ///
-/// One `Sandbox` owns a wasmtime [`Engine`] (with fuel metering enabled) and can
-/// compile many Facets and run each under its own [`Limits`].
+/// One `Sandbox` owns a wasmtime [`Engine`] (with fuel metering **and** an epoch
+/// wall-clock deadline enabled) and can compile many Facets and run each under
+/// its own [`Limits`]. A single background thread advances the engine epoch so
+/// the deadline is enforced without the guest cooperating.
 pub struct Sandbox {
     engine: Engine,
+    /// Set on drop to stop the epoch ticker.
+    ticker_stop: Arc<AtomicBool>,
+    /// The epoch ticker thread, joined on drop.
+    ticker: Option<JoinHandle<()>>,
+}
+
+impl Drop for Sandbox {
+    fn drop(&mut self) {
+        self.ticker_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.ticker.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 impl Sandbox {
-    /// Create a sandbox with fuel metering enabled.
+    /// Create a sandbox with fuel metering and the epoch deadline enabled.
     pub fn new() -> Result<Self> {
         let mut config = Config::new();
         config.consume_fuel(true);
+        // Fuel bounds logic but treats each O(n) bulk-memory op as one unit, so a
+        // loop of `memory.fill` can peg a core; the epoch deadline is the
+        // wall-clock backstop. See `Limits::wall_clock_ms`.
+        config.epoch_interruption(true);
         // Determinism across machines: canonicalize NaN payloads and forbid the
         // deliberately implementation-defined relaxed-SIMD ops.
         config.cranelift_nan_canonicalization(true);
@@ -90,7 +129,26 @@ impl Sandbox {
         config.wasm_threads(false);
         config.wasm_multi_memory(false);
         let engine = Engine::new(&config)?;
-        Ok(Sandbox { engine })
+
+        // Advance the epoch once per tick from a dedicated thread. `Engine` is a
+        // cheap handle (Arc inside), so the ticker holds its own clone and the
+        // whole thing costs one thread per Sandbox, which is long-lived.
+        let ticker_stop = Arc::new(AtomicBool::new(false));
+        let ticker = {
+            let engine = engine.clone();
+            let stop = Arc::clone(&ticker_stop);
+            thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    thread::sleep(Duration::from_millis(EPOCH_TICK_MS));
+                    engine.increment_epoch();
+                }
+            })
+        };
+        Ok(Sandbox {
+            engine,
+            ticker_stop,
+            ticker: Some(ticker),
+        })
     }
 
     /// Compile a Facet from a WASM binary or WAT text. Compilation validates the
@@ -125,6 +183,11 @@ impl Sandbox {
         );
         store.limiter(|state| &mut state.limits);
         store.set_fuel(limits.fuel)?;
+        // Wall-clock backstop: trap once the engine epoch advances past the
+        // deadline (ticks of EPOCH_TICK_MS). At least one tick so a zero can
+        // never mean "trap immediately".
+        let deadline_ticks = limits.wall_clock_ms.div_ceil(EPOCH_TICK_MS).max(1);
+        store.set_epoch_deadline(deadline_ticks);
         Ok(store)
     }
 
@@ -600,6 +663,37 @@ mod tests {
         assert!(
             result.is_err(),
             "an infinite-looping map Facet must be halted by fuel"
+        );
+    }
+
+    /// `run` loops `memory.fill` over its whole 16 MiB memory forever. Fuel charges
+    /// exactly one unit per fill regardless of length, so a huge fuel budget does
+    /// not bound the wall-clock work — only the epoch deadline can halt it. This is
+    /// the case fuel alone does not cover (audit C1).
+    const BULK_MEMORY_LOOP_WAT: &str = r#"
+        (module
+          (memory (export "memory") 256 256)
+          (func (export "run") (param i32 i32) (result i32)
+            (loop $l
+              (memory.fill (i32.const 0) (i32.const 0) (i32.const 16777216))
+              (br $l))
+            (i32.const 0)))
+    "#;
+
+    #[test]
+    fn epoch_bounds_bulk_memory_loop() {
+        let sb = Sandbox::new().unwrap();
+        let facet = sb.compile(BULK_MEMORY_LOOP_WAT).unwrap();
+        // Effectively unlimited fuel: only the wall-clock deadline may stop it.
+        let limits = Limits {
+            fuel: u64::MAX,
+            wall_clock_ms: 100,
+            ..Limits::default()
+        };
+        let result = sb.run_i32(&facet, limits, 0, 0);
+        assert!(
+            result.is_err(),
+            "a bulk-memory loop must be halted by the wall-clock epoch deadline"
         );
     }
 
