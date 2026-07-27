@@ -65,6 +65,19 @@ pub const MAX_CELLS: usize = 8_000_000;
 /// memory cap. Byte-aware, matching the ASCII engine's budget.
 pub const MAX_FEATURE_BYTES: usize = 8 * 1024 * 1024;
 
+/// Upper bound on the STFT window length, in samples. The cell budget bounds
+/// `frames × bands` but not `win`, so without this a tiny signal with a huge `win`
+/// would drive an unbounded `hann(win)` allocation (16 GB for `win = 4e9`, an
+/// overflow-abort on wasm32). Generous vs. any real window (the manifest declares a
+/// max of 16 384) while making the allocation and the per-frame cost finite.
+pub const MAX_WINDOW: usize = 1 << 16;
+
+/// Upper bound on total Goertzel work for one extraction (`frames × bands × win`).
+/// Capping `win` and cell count each still leaves their product quadratic in signal
+/// length; this bounds the actual CPU a single (engine-side, un-sandboxed) extraction
+/// can spend. ~1e9 steps is well above any legitimate spectrogram.
+pub const MAX_STFT_OPS: usize = 1 << 30;
+
 /// Render a signal to spectrogram text using the density-ramp mapping.
 ///
 /// This is the **native reference** for running the image `facet-ramp` over spectral
@@ -112,6 +125,10 @@ pub mod error {
         TooManyCells { cells: usize, max: usize },
         /// The feature buffer would exceed [`crate::MAX_FEATURE_BYTES`].
         FeatureBufferTooLarge { bytes: usize, max: usize },
+        /// The STFT window exceeded [`crate::MAX_WINDOW`] samples.
+        WindowTooLarge { win: usize, max: usize },
+        /// Total Goertzel work exceeded [`crate::MAX_STFT_OPS`].
+        WorkBudgetExceeded { ops: usize, max: usize },
     }
 
     impl core::fmt::Display for Error {
@@ -133,6 +150,18 @@ pub mod error {
                     f,
                     "feature buffer is {bytes} bytes, exceeding the maximum of {max}"
                 ),
+                Error::WindowTooLarge { win, max } => {
+                    write!(
+                        f,
+                        "STFT window is {win} samples, exceeding the maximum of {max}"
+                    )
+                }
+                Error::WorkBudgetExceeded { ops, max } => {
+                    write!(
+                        f,
+                        "STFT work is {ops} steps, exceeding the maximum of {max}"
+                    )
+                }
             }
         }
     }
@@ -360,6 +389,21 @@ pub mod feature {
         check_feature_budget(ncells, 1)?;
 
         let win = grid.win() as usize;
+        // Bound the window allocation and the total Goertzel cost, neither of which the
+        // cell budget covers (win is orthogonal to frames × bands). Audit H6.
+        if win > crate::MAX_WINDOW {
+            return Err(Error::WindowTooLarge {
+                win,
+                max: crate::MAX_WINDOW,
+            });
+        }
+        let ops = ncells.checked_mul(win).ok_or(Error::DimensionOverflow)?;
+        if ops > crate::MAX_STFT_OPS {
+            return Err(Error::WorkBudgetExceeded {
+                ops,
+                max: crate::MAX_STFT_OPS,
+            });
+        }
         let hop = grid.hop() as usize;
         let window = hann(win);
 
@@ -645,6 +689,31 @@ mod tests {
         assert!(matches!(
             feature::extract(&sig, &grid),
             Err(Error::FeatureBufferTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn huge_window_is_rejected_not_allocated() {
+        // A tiny signal with an absurd window passes the cell budget (1 frame) but must
+        // not drive a multi-GB hann() allocation — reject it first. Audit H6.
+        let sig = SignalRef::new(&[0.0f32; 8], 8000).unwrap();
+        let grid = SpectroGrid::new(1, 4_000_000_000, 1, 80.0, 3600.0);
+        assert!(matches!(
+            feature::extract(&sig, &grid),
+            Err(Error::WindowTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn excessive_stft_work_is_rejected() {
+        // Window within MAX_WINDOW and cells exactly at the byte budget (2^21 cells),
+        // but their product exceeds the work ceiling (2^21 * 513 > 2^30). Rejected
+        // before any Goertzel pass. Audit H6.
+        let sig = SignalRef::new(&[0.0f32; 66_048], 44_100).unwrap();
+        let grid = SpectroGrid::new(32, 513, 1, 80.0, 8000.0);
+        assert!(matches!(
+            feature::extract(&sig, &grid),
+            Err(Error::WorkBudgetExceeded { .. })
         ));
     }
 
