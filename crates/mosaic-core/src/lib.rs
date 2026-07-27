@@ -203,16 +203,29 @@ pub mod compose {
     }
 
     /// Whether a scalar value is unsafe to emit from untrusted Facet output and must
-    /// be masked to `U+FFFD`: any C0/C1 control or `DEL` (`char::is_control`, covering
-    /// `ESC`, `LF`, `CR`, …) and the bidirectional/format overrides used for visual
-    /// spoofing. Rust's std cannot query the `Cf` general category without a Unicode
-    /// table, so the well-known spoofing overrides are listed explicitly.
+    /// be masked to `U+FFFD`. Rust's std cannot query Unicode general categories without
+    /// a table, so the classes that break a fixed cell-per-column text grid are listed
+    /// explicitly. Only printable glyphs cross the boundary.
     fn is_unsafe_glyph(c: char) -> bool {
-        c.is_control()
+        c.is_control() // C0/C1 controls + DEL: ESC (escape injection), LF/CR (grid)
             || matches!(c,
+                // Bidirectional/format overrides used for visual spoofing.
                 '\u{200E}' | '\u{200F}' | '\u{061C}'
                 | '\u{202A}'..='\u{202E}'
-                | '\u{2066}'..='\u{2069}')
+                | '\u{2066}'..='\u{2069}'
+                // Line/paragraph separators (Zl/Zp, not Cc, so `is_control` misses
+                // them) — a forced line break in a <pre> / JS string, breaking the grid
+                // exactly as LF/CR do.
+                | '\u{2028}' | '\u{2029}'
+                // Zero-width / invisible format characters: not printable glyphs, and
+                // each desyncs the one-glyph-per-column invariant while counting as a
+                // char. ZWSP/ZWNJ/ZWJ, WORD JOINER, BOM/ZWNBSP.
+                | '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}'
+                // Combining Diacritical Marks: stacking accents (Zalgo) overflow a cell
+                // vertically. A one-glyph-per-cell art grid never legitimately holds a
+                // standalone combining mark. (The base block; full `Mn` coverage would
+                // need a Unicode table.)
+                | '\u{0300}'..='\u{036F}')
     }
 
     #[cfg(test)]
@@ -234,6 +247,18 @@ pub mod compose {
             // survives. This blocks terminal-escape injection and newline-driven grid
             // corruption from untrusted Facet output, once, for every engine.
             let cps = vec![0x1Bu32, 0x0A, 0x7F, 0x202E, 0x41];
+            assert_eq!(
+                compose_codepoints(5, 1, &cps),
+                "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}A"
+            );
+        }
+
+        #[test]
+        fn masks_line_separators_zero_width_and_combining() {
+            // U+2028 (line sep), U+200B (ZWSP), U+FEFF (BOM), U+0301 (combining acute)
+            // all break a fixed cell grid but are not C0/C1 controls -> must still be
+            // masked; 'A' survives. Audit M2.
+            let cps = vec![0x2028u32, 0x200B, 0xFEFF, 0x0301, 0x41];
             assert_eq!(
                 compose_codepoints(5, 1, &cps),
                 "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}A"
