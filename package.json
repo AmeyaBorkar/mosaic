@@ -5,7 +5,7 @@
   "packageManager": "pnpm@11.15.1",
   "description": "Mosaic - a platform for community-authored visual methods. TypeScript shell over the Rust core (see Cargo.toml).",
   "scripts": {
-    "test": "node --test packages/facet-abi/test/conformance.test.ts packages/facet-abi/test/adversarial.test.ts packages/facet-abi/test/conformance-gate.test.ts packages/facet-abi/test/timeout.test.ts packages/facet-abi/test/dsl.test.ts packages/facet-abi/test/cert.test.ts packages/facet-abi/test/program.test.ts crates/mosaic-wasm/test/pipeline.test.ts crates/mosaic-wasm/test/spectral.test.ts crates/mosaic-wasm/test/composite.test.ts crates/mosaic-wasm/test/authoring.test.ts",
+    "test": "node --test packages/facet-abi/test/conformance.test.ts packages/facet-abi/test/adversarial.test.ts packages/facet-abi/test/conformance-gate.test.ts packages/facet-abi/test/timeout.test.ts packages/facet-abi/test/dsl.test.ts packages/facet-abi/test/cert.test.ts packages/facet-abi/test/program.test.ts crates/mosaic-wasm/test/pipeline.test.ts crates/mosaic-wasm/test/spectral.test.ts crates/mosaic-wasm/test/composite.test.ts crates/mosaic-wasm/test/authoring.test.ts crates/mosaic-wasm/test/color.test.ts",
     "typecheck": "tsc -p packages/facet-abi/tsconfig.json"
   },
   "devDependencies": {

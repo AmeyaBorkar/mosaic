@@ -368,6 +368,98 @@ pub fn compile_dsl(engine: &str, src: &str, params_json: &str) -> Result<Compile
     })
 }
 
+// ---- Colour output: half-block pixel art + per-cell tint ----
+
+/// A coloured half-block render — the browser face of `tessera_ascii::color::HalfBlock`.
+/// `cols × rows` cells, each drawn as `▀` ([`HalfBlock::glyph`]) with `fg[i]` over `bg[i]`
+/// (packed RGBA: `r | g<<8 | b<<16 | a<<24`).
+#[wasm_bindgen]
+pub struct HalfBlock {
+    cols: u32,
+    rows: u32,
+    fg: Vec<u32>,
+    bg: Vec<u32>,
+}
+
+#[wasm_bindgen]
+impl HalfBlock {
+    /// Grid columns.
+    #[wasm_bindgen(getter)]
+    pub fn cols(&self) -> u32 {
+        self.cols
+    }
+
+    /// Grid rows (each cell is two pixels tall).
+    #[wasm_bindgen(getter)]
+    pub fn rows(&self) -> u32 {
+        self.rows
+    }
+
+    /// Per-cell foreground colours (top pixel-half), packed RGBA — one `u32` per cell.
+    #[wasm_bindgen(getter)]
+    pub fn fg(&self) -> Vec<u32> {
+        self.fg.clone()
+    }
+
+    /// Per-cell background colours (bottom pixel-half), packed RGBA.
+    #[wasm_bindgen(getter)]
+    pub fn bg(&self) -> Vec<u32> {
+        self.bg.clone()
+    }
+
+    /// The glyph every cell uses (`▀`, U+2580).
+    #[wasm_bindgen(getter)]
+    pub fn glyph(&self) -> u32 {
+        tessera_ascii::color::HALF_BLOCK
+    }
+}
+
+/// Render `rgba` as coloured half-blocks — coloured pixel art: each cell is `▀` with its top
+/// and bottom pixel-halves' mean colours, so the effective resolution is `cols × 2·rows`.
+/// Colour is computed here (the engine), not by any Facet, so it is deterministic and matches
+/// the server. Throws on a bad image or an oversized grid.
+#[wasm_bindgen(js_name = renderHalfblock)]
+pub fn render_halfblock(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    cols: u32,
+    cell_aspect: f32,
+) -> Result<HalfBlock, JsError> {
+    if cols == 0 {
+        return Err(JsError::new("cols must be greater than zero"));
+    }
+    let image = ImageRef::new(width, height, rgba).map_err(|e| JsError::new(&e.to_string()))?;
+    let grid = Grid::new(width, height, cols, cell_aspect);
+    let hb = tessera_ascii::color::render_halfblock(&image, &grid)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(HalfBlock {
+        cols: hb.cols,
+        rows: hb.rows,
+        fg: hb.fg,
+        bg: hb.bg,
+    })
+}
+
+/// One mean colour per cell (packed RGBA, row-major) — to tint the glyphs a Facet produced,
+/// colourising its ASCII art. Pair each colour with the Facet's token at the same index.
+#[wasm_bindgen(js_name = extractColors)]
+pub fn extract_colors(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    cols: u32,
+    cell_aspect: f32,
+) -> Result<Vec<u32>, JsError> {
+    if cols == 0 {
+        return Err(JsError::new("cols must be greater than zero"));
+    }
+    let image = ImageRef::new(width, height, rgba).map_err(|e| JsError::new(&e.to_string()))?;
+    let grid = Grid::new(width, height, cols, cell_aspect);
+    tessera_ascii::color::extract_cell_colors(&image, &grid)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 #[cfg(test)]
 mod dsl_tests {
     use super::*;
