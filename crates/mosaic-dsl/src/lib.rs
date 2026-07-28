@@ -29,8 +29,10 @@
 //!   binding is a *shared* subexpression, emitted where used, so it never adds VM power.
 //! - **builtins** — `abs floor trunc`(1), `min max`(2), `clamp select`(3); the curve helpers
 //!   `mix(a, b, t)`, `remap(x, inLo, inHi, outLo, outHi)`, `smoothstep(e0, e1, x)` (which
-//!   lower to the arithmetic ops above); and the glyph builtins `ramp(v, "chars")` (density:
-//!   `v∈[0,1] → chars`) and `glyph(i, "chars")` (indexed: `chars[floor(i)]`, clamped).
+//!   lower to the arithmetic ops above); `noise(x, y)` — a deterministic hash of two
+//!   coordinates to `[0, 1)` for stipple / grain / hand-dither texture (feed it the position
+//!   slots `u`/`v`); and the glyph builtins `ramp(v, "chars")` (density: `v∈[0,1] → chars`)
+//!   and `glyph(i, "chars")` (indexed: `chars[floor(i)]`, clamped).
 //!
 //! Every value is an `f32`; the final result is taken as a `u32` codepoint. Compilation
 //! self-checks by running [`mosaic_vm::validate`] on its own output.
@@ -712,6 +714,14 @@ impl<'a> Parser<'a> {
                     bin(op::SUB, num(3.0), bin(op::MUL, num(2.0), t)),
                 )
             }
+            // Deterministic hash noise → the VM's HASH op. Two args, one result, so it shares
+            // Op2's shape (like `min`/`max`) and needs no new codegen or Expr variant.
+            "noise" => {
+                let x = self.arg()?;
+                self.expect(&Tok::Comma, "`,`")?;
+                let y = self.arg()?;
+                Expr::Op2(op::HASH, Box::new(x), Box::new(y))
+            }
             _ => return err(pos, format!("unknown function `{name}`")),
         };
         self.expect(&Tok::RParen, "`)` to close the call")?;
@@ -1020,6 +1030,47 @@ mod tests {
         // One cell: u=0.25 (slot 3), v=0.75 (slot 4). floor(25.0)+floor(7.5) = 25+7 = 32.
         let feats = [0.0, 0.0, 0.0, 0.25, 0.75];
         assert_eq!(run1(&b, &feats, 5), vec![32]);
+    }
+
+    #[test]
+    fn noise_is_spatial_deterministic_texture() {
+        // `noise(u, v)` reads the position slots and hashes them to [0, 1). Scaled up so the
+        // codepoint output is observable, `floor(noise(u, v) * 1000)` lands in 0..=999, varies
+        // across the grid, and is stable on re-run — a pure function of its two arguments.
+        const POS_SCHEMA: Schema = Schema {
+            stride: 5,
+            features: &[
+                ("luma", 0),
+                ("grad_mag", 1),
+                ("grad_dir", 2),
+                ("u", 3),
+                ("v", 4),
+            ],
+            params: &[],
+        };
+        let b = compile("floor(noise(u, v) * 1000.0)", &POS_SCHEMA).unwrap();
+        let mut feats = Vec::new();
+        for row in 0..8u32 {
+            for col in 0..8u32 {
+                let u = (col as f32 + 0.5) / 8.0;
+                let v = (row as f32 + 0.5) / 8.0;
+                feats.extend_from_slice(&[0.0, 0.0, 0.0, u, v]);
+            }
+        }
+        let out = run1(&b, &feats, 5);
+        assert!(out.iter().all(|&t| t <= 999));
+        let distinct: std::collections::BTreeSet<u32> = out.iter().copied().collect();
+        assert!(
+            distinct.len() > 20,
+            "noise texture is degenerate: {} distinct",
+            distinct.len()
+        );
+        assert_eq!(out, run1(&b, &feats, 5), "noise must be deterministic");
+        // Cell 10 (row 1, col 2) in isolation hashes identically — a pure function of (u, v),
+        // independent of the surrounding cells.
+        let (u, v) = (2.5 / 8.0, 1.5 / 8.0);
+        let single = run1(&b, &[0.0, 0.0, 0.0, u, v], 5);
+        assert_eq!(single[0], out[10]);
     }
 
     fn native_density(luma: f32) -> u32 {

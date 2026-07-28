@@ -440,6 +440,38 @@ glyphs are printable and pass `compose_codepoints`' unsafe-glyph mask untouched.
 brightness threshold keeps v1 parameter-free (matching `halfblock`); an invert flag or an adaptive
 threshold is an additive follow-up.
 
+### D21 — Deterministic `noise`/`hash` VM opcode *(settled — capability roadmap item 5)*
+The first **"compute more"** unlock, and the first opcode added to the VM since O3: a single new
+op `HASH` (`0x60`) behind the Glint builtin `noise(x, y)` — a deterministic pseudorandom `f32` in
+`[0, 1)`. This is the "biggest texture unlock" (stippling, film grain, hand-dither that kills
+banding, organic breakup), and depends on D18: spatial variation comes from the coordinates the
+author feeds it (`noise(u, v)` gives independent per-cell white noise; `noise(floor(u*k), …)`
+gives blocky noise — all quantization is authorial, the op is a pure hash of its two inputs).
+
+The load-bearing decision is that it is an **integer** hash, not a copied float/shader trick. The
+op reads each input's raw IEEE-754 bits and runs the PCG permuted-congruential hash (Jarzynski &
+Olano, *Hash Functions for GPU Rendering*, JCGT 2020) — `pcg(bits(x) ^ pcg(bits(y)))` — as pure
+`u32` wrapping arithmetic, then takes the top 24 bits scaled by an exact `2^-24`. Every step is
+integer or exact `f32`, so it is **bit-identical native vs wasm** and needs no `libm`. Because it
+pops two and pushes one with no operand and cannot trap, the static validator admits it with the
+same one-line stack-effect proof as `add` (termination and the single-result invariant are
+untouched; v1 stays straight-line). And because the VM is one crate compiled both ways, the
+semantics reach the browser for free — no TypeScript mirror; the conformance gate is unchanged.
+
+One subtlety earns its own guard. `noise` is the *first* op to observe a value's raw bits, and a
+NaN's payload/sign is implementation-defined on wasm — so a produced NaN could hash differently
+native vs browser. The op therefore **canonicalizes** before hashing: every NaN collapses to one
+payload, and `-0.0` folds to `+0.0` (via `x + 0.0`), so numerically-equal inputs — and *all*
+inputs, not merely well-behaved ones — hash identically on both sides. This keeps `preview ==
+render` unconditional. Proven three ways: the native `mosaic_vm` reference equals the sandboxed
+wasm interpreter byte-for-byte over a random sweep (`mosaic-runtime` `dsl_noise_facet_…`), the
+browser replays a `ramp(noise(u, v), …)` program certificate through its own interpreter
+(`program_cert_golden` case), and the browser compiles + runs a noise Facet end to end
+(`authoring.test.ts`). The interpreter Facet wasm was rebuilt from the changed VM (the only facet
+that links it) and re-committed. No feature stride, DSL frontend beyond the builtin, or
+gather-probe range moved — the op is a leaf. Bounded loops (item 6) and exact scalar builtins
+(item 8) are the remaining "compute more" ops, each gated on a real use case.
+
 ## Open decisions (from the vision — deliberately not yet frozen)
 
 - *All of the vision's open questions — O1, O2, O4, O4.1, O5, and now O3 — are settled;

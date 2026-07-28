@@ -18,9 +18,12 @@
 //! underflow/overflow and a single result at `End`, and (because v1 is straight-line, no
 //! jumps) guaranteed termination. [`run`] then evaluates a validated program without ever
 //! indexing out of bounds; any residual anomaly is returned as a [`VmError`], never a
-//! panic. Every operation is plain `f32` arithmetic or an IEEE round-to-integral
-//! (`floor`/`trunc`) — no transcendentals, no `mul_add` — so evaluation is bit-identical
-//! across the native and wasm builds (the basis of preview == render for DSL Facets).
+//! panic. Every operation is plain `f32` arithmetic, an IEEE round-to-integral
+//! (`floor`/`trunc`), or a fixed **integer hash** ([`op::HASH`]) — no transcendentals, no
+//! `mul_add` — so evaluation is bit-identical across the native and wasm builds (the basis
+//! of preview == render for DSL Facets). The hash reads a value's raw bits, but first
+//! canonicalizes NaN (whose payload is implementation-defined on wasm) and `-0.0`, so even
+//! those inputs hash identically on both sides.
 //!
 //! ## Domain-agnostic
 //!
@@ -94,6 +97,13 @@ pub mod op {
     /// Table lookup (operand: `u16` table id, LE): pop an index, push
     /// `table[clamp(index, 0, len-1)]` as an `f32` codepoint.
     pub const TABLE: u8 = 0x50;
+
+    /// Deterministic hash noise: pop `y`, pop `x` (x pushed first), push a pseudorandom
+    /// `f32` in `[0, 1)` that is a fixed integer hash of the two inputs' bits. Bit-identical
+    /// on native and wasm (integer arithmetic only; NaN/`-0.0` canonicalized first), so a
+    /// `noise(x, y)` Facet previews exactly as it renders. Spatial variation comes from the
+    /// coordinates the author feeds it (e.g. the engine's `u`/`v`); this op adds no state.
+    pub const HASH: u8 = 0x60;
 }
 
 /// Why a program was rejected or an evaluation could not proceed. Always a value.
@@ -145,6 +155,48 @@ fn read_u32(bytes: &[u8], off: usize) -> Result<u32, VmError> {
 
 fn read_f32(bytes: &[u8], off: usize) -> Result<f32, VmError> {
     Ok(f32::from_bits(read_u32(bytes, off)?))
+}
+
+/// A high-quality integer hash (the PCG permuted-congruential hash from Jarzynski & Olano,
+/// *Hash Functions for GPU Rendering*, JCGT 2020). Pure `u32` wrapping arithmetic with strong
+/// avalanche, so a tiny change in the input scatters ~half the output bits. The one
+/// data-dependent shift amount is `(state >> 28) + 4`, always in `4..=19`; [`u32::wrapping_shr`]
+/// masks it mod 32 exactly as wasm's `i32.shr_u` does, so the result is bit-identical on native
+/// and wasm and never panics on the shift.
+fn pcg(v: u32) -> u32 {
+    let state = v.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+    let word = (state.wrapping_shr((state >> 28) + 4) ^ state).wrapping_mul(277_803_737);
+    (word >> 22) ^ word
+}
+
+/// Map an `f32` to a 32-bit hash seed from its raw IEEE-754 bits — first neutralizing two values
+/// that would otherwise make `noise` misbehave, for two *different* reasons. **NaN** is the one
+/// that matters for `preview == render`: a produced NaN's payload and sign are implementation-
+/// defined on wasm, so every NaN is collapsed to a single canonical payload, making the seed
+/// platform-independent. **`-0.0`** is folded to `+0.0` (via `x + 0.0`) not for bit-stability —
+/// its bits *are* identical on both builds (`0x8000_0000`) — but because it is `==` `+0.0`, so
+/// numerically-equal inputs must hash alike. Every other value passes through unchanged: `x + 0.0`
+/// is the identity on finite non-zero values, the infinities, and subnormals, all of which already
+/// have identical bits on both builds. This keeps `noise` bit-identical for *all* inputs, not only
+/// the well-behaved ones an author usually feeds it.
+fn hash_bits(x: f32) -> u32 {
+    if x.is_nan() {
+        0x7FC0_0000
+    } else {
+        (x + 0.0).to_bits()
+    }
+}
+
+/// The `noise(x, y)` primitive behind [`op::HASH`]: a deterministic pseudorandom `f32` in
+/// `[0, 1)`. Hashes `y`, folds it into `x`, and hashes again, so both coordinates fully
+/// avalanche. The result takes the top 24 hash bits scaled by `2^-24`, which is exactly
+/// representable (`h >> 8 < 2^24`), so the output is an exact value in `[0, 1)` — no rounding,
+/// identical on both builds.
+fn hash2(x: f32, y: f32) -> f32 {
+    let h = pcg(hash_bits(x) ^ pcg(hash_bits(y)));
+    // 2^-24, exact: 16_777_216 == 2^24 and 1.0 are both representable, so the quotient is too.
+    const INV_2P24: f32 = 1.0 / 16_777_216.0;
+    (h >> 8) as f32 * INV_2P24
 }
 
 /// A validated, borrowed program: header offsets into the original byte slice. Produced by
@@ -321,7 +373,8 @@ fn validate_code(p: &Program) -> Result<(), VmError> {
             | op::AND
             | op::OR
             | op::MIN
-            | op::MAX => effect!(2, 1),
+            | op::MAX
+            | op::HASH => effect!(2, 1),
             op::CLAMP | op::SELECT => effect!(3, 1),
             op::TABLE => {
                 let id = read_u16(code, pc)? as usize;
@@ -502,6 +555,11 @@ pub fn run(
                     let b = pop!();
                     let a = pop!();
                     push!(a.max(b));
+                }
+                op::HASH => {
+                    let y = pop!();
+                    let x = pop!();
+                    push!(hash2(x, y));
                 }
                 op::CLAMP => {
                     let hi = pop!();
@@ -816,5 +874,118 @@ mod tests {
             run(&program, &[0.0, 0.0], 1, 3, &mut out).unwrap_err(),
             VmError::StrideMismatch
         );
+    }
+
+    #[test]
+    fn hash_is_normalized_and_deterministic() {
+        // Every output is in [0, 1), and hashing the same inputs twice is identical.
+        for i in 0..500 {
+            let x = (i as f32) * 0.013 - 3.0;
+            let y = (i as f32) * -0.007 + 1.5;
+            let h = hash2(x, y);
+            assert!((0.0..1.0).contains(&h), "hash2({x},{y}) = {h} out of [0,1)");
+            assert_eq!(h, hash2(x, y), "hash must be deterministic");
+        }
+    }
+
+    #[test]
+    fn hash_canonicalizes_nan_and_negative_zero() {
+        // A Facet observing a value's raw bits is the one place preview==render could break:
+        // wasm leaves a produced NaN's payload/sign implementation-defined. Canonicalization
+        // makes every NaN, and both signed zeros, hash to one value — so the op stays
+        // bit-identical for *all* inputs, not only well-behaved ones.
+        let canonical = hash2(f32::NAN, 0.25);
+        for &bits in &[0x7FC0_0000u32, 0xFFC0_0000, 0x7F80_0001, 0xFFFF_FFFF] {
+            let nan = f32::from_bits(bits);
+            assert!(nan.is_nan());
+            assert_eq!(
+                hash2(nan, 0.25),
+                canonical,
+                "NaN payload {bits:#x} must not matter"
+            );
+            assert!((0.0..1.0).contains(&canonical));
+        }
+        // -0.0 and +0.0 are `==`, so they must hash alike (folded via `x + 0.0`).
+        assert_eq!(hash2(-0.0, 0.7), hash2(0.0, 0.7));
+        assert_eq!(hash2(0.3, -0.0), hash2(0.3, 0.0));
+        // A NaN in the second coordinate is canonicalized too.
+        assert_eq!(
+            hash2(0.3, f32::NAN),
+            hash2(0.3, f32::from_bits(0xFFC0_0000))
+        );
+    }
+
+    #[test]
+    fn hash_is_well_distributed_over_a_grid() {
+        // Sample noise at the cell centres of a 64x64 grid (the real `u`/`v` a Facet feeds it)
+        // and check the spread. A broken or constant hash collapses the buckets; a good one
+        // fills them evenly. Tolerances are ~8σ wide, so a healthy hash never flakes.
+        const N: usize = 64;
+        let mut buckets = [0usize; 16];
+        let (mut sum, mut lo, mut hi) = (0.0f64, 1.0f32, 0.0f32);
+        for row in 0..N {
+            for col in 0..N {
+                let u = (col as f32 + 0.5) / N as f32;
+                let v = (row as f32 + 0.5) / N as f32;
+                let h = hash2(u, v);
+                assert!((0.0..1.0).contains(&h));
+                buckets[(h * 16.0) as usize] += 1;
+                sum += h as f64;
+                lo = lo.min(h);
+                hi = hi.max(h);
+            }
+        }
+        let mean = sum / (N * N) as f64;
+        assert!((0.47..=0.53).contains(&mean), "mean {mean} is skewed");
+        assert!(
+            lo < 0.1 && hi > 0.9,
+            "noise does not span the range: [{lo}, {hi}]"
+        );
+        for (i, &count) in buckets.iter().enumerate() {
+            assert!(
+                (128..=384).contains(&count),
+                "bucket {i} has {count} of ~256 samples — distribution is broken"
+            );
+        }
+    }
+
+    #[test]
+    fn hash_runs_through_the_vm() {
+        // The full VM path: validate + run a `floor(noise(f0, f1) * 997)` program. Proves the
+        // validator admits HASH (2->1, no operand) and `run` executes it to a spread of values.
+        let mut a = Asm::new(2);
+        a.loadf(0)
+            .loadf(1)
+            .op(op::HASH)
+            .konst(997.0)
+            .op(op::MUL)
+            .op(op::FLOOR);
+        let bytes = a.finish();
+        let program = validate(&bytes).unwrap();
+
+        let n = 256usize;
+        let mut features = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            features.push((i as f32 + 0.5) / n as f32); // u
+            features.push(((i * 7) % n) as f32 / n as f32); // v
+        }
+        let mut out = vec![0u32; n];
+        run(&program, &features, n, 2, &mut out).unwrap();
+
+        let distinct: std::collections::BTreeSet<u32> = out.iter().copied().collect();
+        assert!(
+            out.iter().all(|&t| t <= 996),
+            "floor(noise*997) must be <= 996"
+        );
+        assert!(
+            distinct.len() > 32,
+            "noise output is degenerate: {} distinct",
+            distinct.len()
+        );
+
+        // Deterministic re-run.
+        let mut again = vec![0u32; n];
+        run(&program, &features, n, 2, &mut again).unwrap();
+        assert_eq!(out, again);
     }
 }

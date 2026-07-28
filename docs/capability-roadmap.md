@@ -125,6 +125,19 @@ Effort is relative: **S** = a focused change, **M** = a real feature with tests 
 - **Where:** a **new integer opcode** in the VM (a portable hash), consumed by a `noise(x, y)` builtin. Needs a coordinate to vary spatially → depends on **1**.
 - **Security / determinism:** must be an **integer hash**, not a copied float/shader trick, so it's bit-identical everywhere. A hand-rolled `f32` LCG is portable but statistically poor and mantissa-limited — hence a dedicated opcode.
 - **Cost:** **M.** New opcode + validator case + goldens; browser mirror in `facet-abi`.
+- **Status: shipped (D21).** One opcode, `HASH` (`0x60`), behind the Glint builtin
+  `noise(x, y) → [0, 1)`. It runs the PCG integer hash (Jarzynski & Olano, JCGT 2020) over the
+  inputs' IEEE bits in pure `u32` arithmetic, scaled by an exact `2^-24` — so it is bit-identical
+  native vs wasm with no `libm`. Spatial variation is authorial (`noise(u, v)` = per-cell white
+  noise; quantize the coordinates for blocky noise). The validator admits it with the same
+  stack-effect proof as `add` (2→1, no operand, can't trap; still total and straight-line). The
+  one real subtlety: `noise` is the first op to read raw bits, so it **canonicalizes NaN and
+  `-0.0`** before hashing (a wasm NaN's payload is implementation-defined) — keeping `preview ==
+  render` unconditional. The predicted "browser mirror in `facet-abi`" proved **unnecessary**: the
+  VM is one crate compiled both ways, so the semantics reach the browser for free (the interpreter
+  wasm was rebuilt and re-committed; the conformance gate is unchanged). Proven by the native↔wasm
+  byte-identical sweep, a `ramp(noise(u, v), …)` program certificate the browser replays, and an
+  end-to-end browser compile-and-run.
 
 ### 6 · Bounded loops — `iterate`
 - **Unlocks:** Mandelbrot/Julia escape-time fractals, iterative tone curves, ray-marched patterns — the *only* genuinely loop-shaped class (per-cell iterated recurrences).

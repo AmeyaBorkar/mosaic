@@ -370,7 +370,9 @@ highlighting and autocomplete.
 
 - **Ops**: `+ - * /`, `< <= > >= == !=`, `&& || !`, unary `-`, ternary `c ? a : b`.
 - **Builtins**: `abs floor trunc`, `min max`, `clamp select`; curve helpers `mix(a, b, t)`,
-  `remap(x, inLo, inHi, outLo, outHi)`, `smoothstep(e0, e1, x)`; and the glyph pair —
+  `remap(x, inLo, inHi, outLo, outHi)`, `smoothstep(e0, e1, x)`; `noise(x, y)` — a deterministic
+  hash of two coordinates to `[0, 1)` (feed it `u`/`v` for per-cell stipple/grain; quantize the
+  coordinates like `noise(floor(u*16), floor(v*16))` for blocky noise); and the glyph pair —
   `ramp(v, "chars")` maps `v ∈ [0,1]` across the ramp; `glyph(i, "chars")` indexes it.
 - **`let`**: `let name = expr; body` names a reusable subexpression — for readability in bigger
   Facets (it adds no new power; it lowers to the same ops).

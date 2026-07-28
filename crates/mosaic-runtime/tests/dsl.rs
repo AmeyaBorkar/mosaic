@@ -121,3 +121,74 @@ fn dsl_edge_or_density_facet_sandbox_equals_reference() {
         .unwrap();
     assert_eq!(again, sandboxed);
 }
+
+#[test]
+fn dsl_noise_facet_sandbox_equals_reference() {
+    // The HASH opcode is the first op to observe a value's raw bits, so its bit-identity
+    // native<->wasm is the load-bearing proof for `noise`. Compare at FULL precision:
+    // `floor(noise(u, v) * 2^24)` is exactly the top 24 hash bits, so `assert_eq!` checks every
+    // bit — a ramp would only compare a coarse 10-way bucket and hide a sub-bucket divergence.
+    let sandbox = Sandbox::new().unwrap();
+    let facet = sandbox.compile(FACET_INTERP).unwrap();
+
+    // Run a program natively (the reference) and in the sandbox (the shared wasm interpreter),
+    // returning both token vectors for an exact comparison.
+    let run_both = |src: &str, features: &[f32], n: usize| -> (Vec<u32>, Vec<u32>) {
+        let bytes = compile(src, &ASCII_SCHEMA).unwrap();
+        let validated = mosaic_vm::validate(&bytes).unwrap();
+        let mut native = vec![0u32; n];
+        mosaic_vm::run(&validated, features, n, 8, &mut native).unwrap();
+        let sandboxed = sandbox
+            .run_program(&facet, Limits::default(), &bytes, features, n, 8)
+            .unwrap();
+        (native, sandboxed)
+    };
+
+    // Deterministic stride-8 sweep; slots 3 (u) and 4 (v) drive the noise.
+    let mut state: u64 = 0x51ED_2A17_0DDB_1A5E;
+    let mut rng = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 40) as f32 / (1u64 << 24) as f32
+    };
+    let n = 300usize;
+    let mut features = Vec::with_capacity(n * 8);
+    for _ in 0..(n * 8) {
+        features.push(rng());
+    }
+
+    let (native, sandboxed) = run_both("floor(noise(u, v) * 16777216.0)", &features, n);
+    assert_eq!(
+        sandboxed, native,
+        "sandboxed noise diverged from native at full 24-bit precision — HASH is not bit-identical"
+    );
+    let distinct: std::collections::BTreeSet<u32> = sandboxed.iter().copied().collect();
+    assert!(
+        distinct.len() > 100,
+        "noise should be high-entropy over 300 cells, got {} distinct",
+        distinct.len()
+    );
+    // Deterministic re-run.
+    let (_, again) = run_both("floor(noise(u, v) * 16777216.0)", &features, n);
+    assert_eq!(again, sandboxed);
+
+    // Canonicalization must cross the wasm boundary too — the one behaviour that could break
+    // preview==render silently. Here `noise`'s x is a *runtime* NaN (`0.0 / 0.0`), whose payload
+    // and sign wasm leaves implementation-defined. Because both builds canonicalize NaN before
+    // hashing, the full-precision output is still bit-identical; had the wasm interpreter kept
+    // its own NaN payload (or dropped the fold), this exact comparison would diverge.
+    let (native_nan, sandboxed_nan) =
+        run_both("floor(noise(0.0 / 0.0, v) * 16777216.0)", &features, n);
+    assert_eq!(
+        sandboxed_nan, native_nan,
+        "NaN canonicalization is not bit-identical native<->wasm"
+    );
+    // x is a fixed (canonical) NaN, so the noise still varies with v across the cells.
+    let distinct_nan: std::collections::BTreeSet<u32> = sandboxed_nan.iter().copied().collect();
+    assert!(
+        distinct_nan.len() > 100,
+        "NaN-seeded noise should still vary with v, got {} distinct",
+        distinct_nan.len()
+    );
+}

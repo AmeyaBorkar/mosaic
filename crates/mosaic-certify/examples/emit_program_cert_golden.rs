@@ -103,6 +103,9 @@ fn main() {
                 &interp,
                 r#"ramp(clamp(luma - 0.5 * u + 0.3 * v + 0.2 * r - 0.1 * g - 0.2 * b, 0, 1), " .:-=+*#%@")"#,
             ),
+            // A noise-driven density ramp — exercises the HASH opcode, mapping the hash across
+            // the full glyph set so the browser replay checks bit-identical hash noise.
+            case(&sandbox, &interp, r#"ramp(noise(u, v), " .:-=+*#%@")"#),
         ],
     };
 

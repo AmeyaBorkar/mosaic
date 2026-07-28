@@ -71,6 +71,27 @@ test("compile DSL -> extract -> run -> compose yields a text grid + a control ma
   assert.ok(textOut.length > 0);
 });
 
+test("a noise Facet compiles and runs in the browser, scattering glyphs across the grid", async () => {
+  // `noise(u, v)` — the HASH opcode — authored, compiled by the browser's own mosaic-dsl
+  // (compileDsl), and run in the sandbox, exactly as a UI would. Proves the browser compiler
+  // accepts the builtin and the interp executes the opcode.
+  const compiled = wasm.compileDsl("ascii", 'ramp(noise(u, v), " .:-=+*#%@")', "[]");
+  const module = await compileFacet(interpBytes);
+  const [w, h] = [16, 16];
+  const fb = wasm.extract_features(rampImage(w, h), w, h, 8, 2.0);
+  const features = Float32Array.from(fb.data);
+  const { ncells, stride } = fb;
+  fb.free();
+
+  const tokens = runFacetProgram(module, compiled.program, features, ncells, stride);
+  // Noise scatters glyphs across the ramp, so several distinct glyphs appear even on this
+  // smooth image — breaking up banding is the whole point.
+  assert.ok(new Set(tokens).size > 3, "expected varied noise glyphs");
+  // Deterministic: identical inputs reproduce identical tokens.
+  const again = runFacetProgram(module, compiled.program, features, ncells, stride);
+  assert.deepEqual(Array.from(again), Array.from(tokens));
+});
+
 test("a live control (applyParams) changes the render without recompiling", async () => {
   const compiled = wasm.compileDsl("ascii", SRC, PARAMS);
   const module = await compileFacet(interpBytes);
