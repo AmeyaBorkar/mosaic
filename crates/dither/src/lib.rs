@@ -109,11 +109,12 @@ mod tests {
 
     #[test]
     fn respects_stride_reading_only_luminance() {
-        // stride 3 (luma, mag, dir): only slot 0 is read/diffused; the others are
-        // untouched noise. Two bright luma cells -> two '@'.
-        let mut feats = [1.0, 9.9, -9.9, 1.0, 9.9, -9.9];
+        // stride 5 (luma, mag, dir, u, v) — the real ascii buffer: only slot 0 is
+        // read/diffused; the others (edge, position) are untouched noise. Two bright luma
+        // cells -> two '@'.
+        let mut feats = [1.0, 9.9, -9.9, 0.1, 0.2, 1.0, 9.9, -9.9, 0.3, 0.4];
         let mut out = [0u32; 2];
-        floyd_steinberg(&mut feats, 2, 1, 3, &mut out);
+        floyd_steinberg(&mut feats, 2, 1, 5, &mut out);
         assert_eq!(out, [BRIGHT, BRIGHT]);
     }
 

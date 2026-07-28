@@ -71,6 +71,14 @@ Effort is relative: **S** = a focused change, **M** = a real feature with tests 
 - **Security / determinism:** position is trivially exact and deterministic. Zero risk.
 - **Cost:** **S.** Extend the feature buffer + the `ascii` schema; rebless the render/DSL goldens. The `preview == render` proofs carry over unchanged.
 - **Note:** highest leverage-per-cost item on the board — an entire dimension of art for a small, safe change.
+- **Status: shipped.** The `ascii` engine now emits the normalized cell-centre position `u`/`v`
+  (stride 3 → 5), and Glint reads them by name. They are `u = (col+0.5)/cols` and
+  `v = (row+0.5)/rows` in exact `f32`, so
+  `preview == render` holds unchanged — proven by the reblessed render/DSL/program-cert goldens
+  and the browser-parity replays, which now exercise a position-shaded Facet. The gather-cert
+  probe range was widened to keep the engine's real stride inside the certified envelope. Raw
+  integer `cx`/`cy` stay a trivial additive extension (stride 5 → 7) if a use case ever needs
+  absolute, resolution-dependent periodicity.
 
 ### 2 · Richer engine features (colour, neighbour, multi-scale)
 - **Unlocks:** colour-aware styling (duotone by hue, warm/cool glyph sets, chroma-driven density); texture-aware line art and local-contrast looks via neighbour statistics (variance, structure tensor, dominant orientation) and multi-scale luma (a mini image pyramid).

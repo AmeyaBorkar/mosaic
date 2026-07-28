@@ -114,7 +114,7 @@ out of that one nearest-glyph rule. The atlas + matcher live in a single `no_std
 `glyph-atlas` crate compiled into **both** the native engine and the untrusted wasm
 Facet (`facets/structural`) — one matcher, not two that could drift. L2 is opt-in
 (only structural Facets pay the 64-slot stride, via a separate `extract_structural`;
-density/edge Facets keep the stride-3 L0+L1 path). Proven native≡sandboxed over 64
+density/edge Facets keep the stride-5 L0+L1+position path). Proven native≡sandboxed over 64
 random images and browser≡native end-to-end.
 
 ### D7 — Facet runtime: wasmtime, pinned current *(settled)*
@@ -384,6 +384,26 @@ resolves a Facet by registry **id** (only `Published` renders by id) as well as 
 a program on the shared interpreter at its declared stride — the stride check fully guards
 vocabulary compatibility, so the render path needs no engine table. Bytes are served
 kind-specifically: `/wasm` for a module, `/program` for bytecode.
+
+### D18 — Cell position in the ASCII vocabulary (`u`/`v`) *(settled — capability roadmap item 1)*
+The first "see more, not compute more" unlock: the `ascii` engine now measures each cell's
+**normalized centre position** as a self-only `Vector{2}` `position` — `u = (col+0.5)/cols`,
+`v = (row+0.5)/rows`, each in `(0, 1)` — appended to the core vocabulary (stride **3 → 5**,
+slots 3–4). Glint reads them by the names `u`/`v`; there are **no new VM ops**, because position
+is just more numbers the trusted engine produces. It unlocks gradients, vignettes, spotlights and
+spatial masks, and is the prerequisite for spatially-varying noise and coordinate fractals
+(roadmap 5–6).
+
+Cell-centre (not corner) makes it symmetric at both edges and free of any divide-by-zero on a
+degenerate 1×N grid. The cast, the `+ 0.5`, and the divide are each exact or correctly-rounded in
+`f32`, so it is bit-identical native vs wasm and `preview == render` (D9) carries over unchanged —
+proven by the reblessed render/DSL/program-cert goldens, whose browser replays now exercise a
+position-shaded Facet. One coupled invariant moved with it: the wasm **gather-certificate probe
+range** widened from 1..=4 to 1..=6 so the stride-5 `ascii` vocabulary stays inside the per-Facet
+certified envelope. (The stride-64 `ascii-structural` path sits outside that range by design — its
+browser≡native parity is proven end-to-end by the render golden's `structuralText`, one matcher
+compiled both ways, not by these per-Facet probes.) Raw integer `cx`/`cy` remain a trivial
+additive extension (stride 5 → 7) if absolute, resolution-dependent periodicity is ever wanted.
 
 ## Open decisions (from the vision — deliberately not yet frozen)
 

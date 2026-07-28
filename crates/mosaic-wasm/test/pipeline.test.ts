@@ -170,7 +170,7 @@ test("full dither (propagation) browser pipeline matches the native render", asy
     );
     try {
       // The 2-D ABI: hand the Facet the grid shape so its feedback loop can address
-      // neighbours. L0 luminance is slot 0 of the stride-3 buffer.
+      // neighbours. L0 luminance is slot 0 of the stride-5 buffer.
       const tokens = runFacetMap2d(ditherModule, fb.data, fb.cols, fb.rows, fb.stride);
       const text = wasm.compose(fb.cols, fb.rows, tokens);
       assert.equal(text, c.ditherText, `${c.name}: dither browser render != native`);

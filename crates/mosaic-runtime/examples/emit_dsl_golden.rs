@@ -15,14 +15,22 @@ use std::path::PathBuf;
 const FACET_INTERP: &[u8] = include_bytes!("../tests/facet_interp.wasm");
 
 const ASCII_SCHEMA: Schema = Schema {
-    stride: 3,
-    features: &[("luma", 0), ("grad_mag", 1), ("grad_dir", 2)],
+    stride: 5,
+    features: &[
+        ("luma", 0),
+        ("grad_mag", 1),
+        ("grad_dir", 2),
+        ("u", 3),
+        ("v", 4),
+    ],
     params: &[("threshold", 0.6)],
 };
 
 fn main() {
-    // A branchy Facet exercising ternary, comparison, clamp, glyph-table and ramp.
-    let src = r#"grad_mag > threshold ? glyph(clamp(grad_dir * 1.27 + 2.0, 0, 3), "-/|\\") : ramp(luma, " .:-=+*#%@")"#;
+    // A branchy Facet exercising ternary, comparison, clamp, glyph-table, ramp, and the
+    // spatial slots u/v (a position-shaded density branch) — so the browser-parity proof
+    // covers the new position features end to end.
+    let src = r#"grad_mag > threshold ? glyph(clamp(grad_dir * 1.27 + 2.0, 0, 3), "-/|\\") : ramp(clamp(luma - 0.5 * u + 0.3 * v, 0, 1), " .:-=+*#%@")"#;
     let program = compile(src, &ASCII_SCHEMA).expect("compile DSL");
 
     // Deterministic feature sweep (same xorshift as tests/dsl.rs) so the golden is stable.
@@ -34,17 +42,19 @@ fn main() {
         (state >> 40) as f32 / (1u64 << 24) as f32
     };
     let n = 64usize;
-    let mut features = Vec::with_capacity(n * 3);
+    let mut features = Vec::with_capacity(n * 5);
     for _ in 0..n {
         features.push(rng()); // luma 0..1
         features.push(rng() * 1.2); // grad_mag straddles threshold 0.6
         features.push(rng() * 6.0 - 3.0); // grad_dir
+        features.push(rng()); // u 0..1
+        features.push(rng()); // v 0..1
     }
 
     let sandbox = Sandbox::new().expect("sandbox");
     let facet = sandbox.compile(FACET_INTERP).expect("compile interp facet");
     let tokens = sandbox
-        .run_program(&facet, Limits::default(), &program, &features, n, 3)
+        .run_program(&facet, Limits::default(), &program, &features, n, 5)
         .expect("run_program");
 
     let mut json = String::from("{\n");
@@ -52,7 +62,7 @@ fn main() {
         "  \"note\": \"DSL browser-parity golden (audit M4): runFacetProgram must match this native run_program output.\",\n",
     );
     json.push_str("  \"facetWasm\": \"fixtures/facet_interp.wasm\",\n");
-    json.push_str("  \"stride\": 3,\n");
+    json.push_str("  \"stride\": 5,\n");
     json.push_str(&format!("  \"ncells\": {n},\n"));
     let prog: Vec<String> = program.iter().map(|b| b.to_string()).collect();
     json.push_str(&format!("  \"program\": [{}],\n", prog.join(",")));

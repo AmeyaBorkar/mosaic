@@ -107,8 +107,8 @@ fn extract_with(
     })
 }
 
-/// Extract the **L0+L1** vocabulary (luminance + gradient, stride 3) — the density
-/// and edge features. For the density/edge Facet (`facet_ramp`).
+/// Extract the **core** vocabulary (luminance + gradient + normalized position, stride 5) —
+/// the density, edge, and spatial features. For the density/edge Facet (`facet_ramp`).
 #[wasm_bindgen]
 pub fn extract_features(
     rgba: &[u8],
@@ -257,7 +257,16 @@ type FeatureVocab = &'static [(&'static str, u16)];
 /// browser extracts (`ascii`: L0+L1 density/edge; `spectral`: band energy).
 fn engine_schema(engine: &str) -> Result<(u16, FeatureVocab), String> {
     match engine {
-        "ascii" => Ok((3, &[("luma", 0), ("grad_mag", 1), ("grad_dir", 2)])),
+        "ascii" => Ok((
+            5,
+            &[
+                ("luma", 0),
+                ("grad_mag", 1),
+                ("grad_dir", 2),
+                ("u", 3),
+                ("v", 4),
+            ],
+        )),
         "spectral" => Ok((1, &[("band_energy", 0)])),
         other => Err(format!(
             "unknown engine {other:?} (expected \"ascii\" or \"spectral\")"
@@ -466,15 +475,23 @@ mod dsl_tests {
 
     #[test]
     fn compiles_ascii_dsl_byte_identical_to_native() {
-        let src = r#"grad_mag > threshold ? glyph(clamp(grad_dir * 1.27 + 2.0, 0, 3), "-/|\\") : ramp(luma, " .:-=+*#%@")"#;
+        // Reads the spatial slots `u`/`v` too, so this pins that the browser and native
+        // compilers resolve the new position features to the same bytes.
+        let src = r#"grad_mag > threshold ? glyph(clamp(grad_dir * 1.27 + 2.0, 0, 3), "-/|\\") : ramp(clamp(luma - 0.5 * u + 0.3 * v, 0, 1), " .:-=+*#%@")"#;
         let params = vec![("threshold".to_string(), 0.6f32)];
         let (program, manifest) = compile_program("ascii", src, &params).unwrap();
         // A direct native compile against the same schema must produce the same bytes.
         let native = mosaic_dsl::compile(
             src,
             &Schema {
-                stride: 3,
-                features: &[("luma", 0), ("grad_mag", 1), ("grad_dir", 2)],
+                stride: 5,
+                features: &[
+                    ("luma", 0),
+                    ("grad_mag", 1),
+                    ("grad_dir", 2),
+                    ("u", 3),
+                    ("v", 4),
+                ],
                 params: &[("threshold", 0.6)],
             },
         )

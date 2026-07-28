@@ -1000,6 +1000,28 @@ mod tests {
         assert!(mosaic_vm::validate(&b).is_ok());
     }
 
+    #[test]
+    fn position_features_resolve_and_run() {
+        // The `ascii` engine's spatial slots `u` (3) and `v` (4) resolve by name and load
+        // independently. A stride-5 schema mirrors the real engine vocabulary
+        // (`mosaic_wasm::engine_schema`); the compiler itself is engine-agnostic.
+        const POS_SCHEMA: Schema = Schema {
+            stride: 5,
+            features: &[
+                ("luma", 0),
+                ("grad_mag", 1),
+                ("grad_dir", 2),
+                ("u", 3),
+                ("v", 4),
+            ],
+            params: &[],
+        };
+        let b = compile("floor(u * 100.0) + floor(v * 10.0)", &POS_SCHEMA).unwrap();
+        // One cell: u=0.25 (slot 3), v=0.75 (slot 4). floor(25.0)+floor(7.5) = 25+7 = 32.
+        let feats = [0.0, 0.0, 0.0, 0.25, 0.75];
+        assert_eq!(run1(&b, &feats, 5), vec![32]);
+    }
+
     fn native_density(luma: f32) -> u32 {
         let l = luma.clamp(0.0, 1.0);
         let n = RAMP.chars().count();

@@ -45,7 +45,7 @@ pub const MAX_CELLS: usize = 8_000_000;
 
 /// Upper bound on the `f32` feature buffer produced for one render, in **bytes**.
 /// Unlike [`MAX_CELLS`] (a cell *count*), this is byte-aware, so it holds across both
-/// the stride-3 (L0+L1) and stride-64 (L2) vocabularies — an 8M-cell L2 grid would
+/// the stride-5 (L0+L1+position) and stride-64 (L2) vocabularies — an 8M-cell L2 grid would
 /// otherwise allocate ~2 GB. Sized so the buffer plus a Facet's output fits inside
 /// `mosaic-runtime`'s 16 MiB per-execution memory cap.
 pub const MAX_FEATURE_BYTES: usize = 8 * 1024 * 1024;
@@ -475,11 +475,12 @@ pub mod feature {
     use glyph_atlas::{PATCH_COLS, PATCH_ROWS, PATCH_SLOTS};
     use mosaic_core::feature::{FeatureField, FeatureSchema, FeatureType, Gather};
 
-    /// The L0+L1 stride (luminance + gradient magnitude/orientation) as a compile-time
-    /// constant, equal to `vocabulary().total_slots()`; used on the hot path so a
-    /// schema `Vec` + `String` keys are not rebuilt every render just to sum a
-    /// constant (asserted equal in `vocabulary_matches_core_schema`).
-    const STRIDE_L0_L1: u32 = 3;
+    /// The core per-cell stride — luminance (L0, slot 0), gradient magnitude/orientation
+    /// (L1, slots 1–2), and normalized cell-center position `u`/`v` (L0, slots 3–4) — as a
+    /// compile-time constant, equal to `vocabulary().total_slots()`; used on the hot path so
+    /// a schema `Vec` + `String` keys are not rebuilt every render just to sum a constant
+    /// (asserted equal in `vocabulary_matches_core_schema`).
+    pub(crate) const CORE_STRIDE: u32 = 5;
 
     /// Reject a feature buffer whose byte size overflows or exceeds
     /// [`crate::MAX_FEATURE_BYTES`], *before* it is allocated — so a pathological grid
@@ -503,6 +504,8 @@ pub mod feature {
     /// - `luminance` — L0, self-only scalar (slot 0).
     /// - `gradient` — L1, a radius-1 gathered `Vector{2}` of (magnitude,
     ///   orientation) (slots 1–2).
+    /// - `position` — L0, self-only `Vector{2}` of the cell's normalized centre `(u, v)`,
+    ///   each in `(0, 1)` (slots 3–4). Resolution-independent, exact, deterministic.
     ///
     /// L2 (`patch`, sub-cell structure) is appended here when it lands.
     pub fn vocabulary() -> FeatureSchema {
@@ -518,13 +521,18 @@ pub mod feature {
                     ty: FeatureType::Vector { len: 2 },
                     gather: Gather::Neighborhood { radius: 1 },
                 },
+                FeatureField {
+                    key: "position".into(),
+                    ty: FeatureType::Vector { len: 2 },
+                    gather: Gather::SelfOnly,
+                },
             ],
         }
     }
 
     /// Per-cell features laid out per [`vocabulary`], row-major over cells, each
     /// cell occupying `stride` (= `schema.total_slots()`) contiguous `f32`s:
-    /// `[luminance, gradient_magnitude, gradient_orientation]`.
+    /// `[luminance, gradient_magnitude, gradient_orientation, u, v]`.
     #[derive(Debug, Clone)]
     pub struct FeatureBuffer {
         pub cols: u32,
@@ -548,7 +556,7 @@ pub mod feature {
     /// gradient of that luminance grid — each cell gathering its 8 neighbors with
     /// edge-clamping (radius-1 gather, D5/O1) — storing magnitude and orientation.
     pub fn extract(image: &ImageRef, grid: &Grid) -> Result<FeatureBuffer, Error> {
-        let stride = STRIDE_L0_L1;
+        let stride = CORE_STRIDE;
         let cols = grid.cols();
         let rows = grid.rows();
         let ncells = cols as usize * rows as usize;
@@ -595,6 +603,13 @@ pub mod feature {
                 data[base] = luminance[row as usize * cols as usize + col as usize];
                 data[base + 1] = (gx * gx + gy * gy).sqrt();
                 data[base + 2] = libm::atan2f(gy, gx);
+                // Normalized cell-centre position, each in (0, 1). Cell-centre (not corner)
+                // so it is symmetric at both edges and never divides by zero — the loop only
+                // runs when `cols`/`rows` >= 1. The cast, the `+ 0.5`, and the divide are each
+                // exact or correctly-rounded in f32 (cols/rows < 2^24 here, bounded by the
+                // feature budget), so the result is bit-identical native vs wasm (preview == render).
+                data[base + 3] = (col as f32 + 0.5) / cols as f32;
+                data[base + 4] = (row as f32 + 0.5) / rows as f32;
             }
         }
 
@@ -990,7 +1005,10 @@ mod tests {
     #[test]
     fn vocabulary_matches_core_schema() {
         let schema = feature::vocabulary();
-        assert_eq!(schema.total_slots(), 3);
+        // The hot-path constant must stay equal to the declared vocabulary's slot count.
+        assert_eq!(schema.total_slots(), feature::CORE_STRIDE);
+        assert_eq!(feature::CORE_STRIDE, 5);
+        // Position is self-only, so it does not widen the gather radius past the gradient's.
         assert_eq!(schema.max_radius(), 1);
     }
 
@@ -1141,6 +1159,33 @@ mod tests {
             feature::extract_structural(&img, &grid),
             Err(Error::FeatureBufferTooLarge { .. })
         ));
+    }
+
+    #[test]
+    fn position_is_the_normalized_cell_centre() {
+        // Every cell's slots 3/4 are its centre (u, v), each strictly in (0, 1), equal to
+        // (col+0.5)/cols and (row+0.5)/rows bit-for-bit (the exact f32 divide the extractor
+        // does — so the golden cross-check holds native vs wasm).
+        let data = solid(8, 8, (128, 128, 128));
+        let img = ImageRef::new(8, 8, &data).unwrap();
+        let grid = Grid::new(8, 8, 4, 1.0);
+        let buf = feature::extract(&img, &grid).unwrap();
+        assert_eq!(buf.stride, 5);
+        let (cols, rows) = (buf.cols, buf.rows);
+        assert!(cols >= 2 && rows >= 2, "want a non-degenerate grid");
+        for row in 0..rows {
+            for col in 0..cols {
+                let cell = buf.cell(col, row);
+                let (u, v) = (cell[3], cell[4]);
+                assert_eq!(u, (col as f32 + 0.5) / cols as f32);
+                assert_eq!(v, (row as f32 + 0.5) / rows as f32);
+                assert!(u > 0.0 && u < 1.0 && v > 0.0 && v < 1.0);
+            }
+        }
+        // The top-left cell centre sits half a cell in from the origin, not on it.
+        let tl = buf.cell(0, 0);
+        assert_eq!(tl[3], 0.5 / cols as f32);
+        assert_eq!(tl[4], 0.5 / rows as f32);
     }
 
     // --- Propagation: error-diffusion dithering ---
