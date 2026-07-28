@@ -24,9 +24,13 @@
 //! - **numbers** — `0.6`, `9`, `-1.5`.
 //! - **char literals** — `'@'` is that codepoint.
 //! - **operators** — `+ - * /`, `< <= > >= == !=`, `&& || !`, unary `-`, and `c ? a : b`.
-//! - **builtins** — `abs floor trunc`(1), `min max`(2), `clamp select`(3), and the glyph
-//!   builtins `ramp(v, "chars")` (density: `v∈[0,1] → chars`) and `glyph(i, "chars")`
-//!   (indexed: `chars[floor(i)]`, clamped).
+//! - **let** — `let NAME = EXPR; BODY` names a reusable subexpression, in scope over `BODY`
+//!   (and shadowing a feature/param of the same name). Purely a frontend convenience — a
+//!   binding is a *shared* subexpression, emitted where used, so it never adds VM power.
+//! - **builtins** — `abs floor trunc`(1), `min max`(2), `clamp select`(3); the curve helpers
+//!   `mix(a, b, t)`, `remap(x, inLo, inHi, outLo, outHi)`, `smoothstep(e0, e1, x)` (which
+//!   lower to the arithmetic ops above); and the glyph builtins `ramp(v, "chars")` (density:
+//!   `v∈[0,1] → chars`) and `glyph(i, "chars")` (indexed: `chars[floor(i)]`, clamped).
 //!
 //! Every value is an `f32`; the final result is taken as a `u32` codepoint. Compilation
 //! self-checks by running [`mosaic_vm::validate`] on its own output.
@@ -90,6 +94,8 @@ enum Tok {
     Question,
     Colon,
     Comma,
+    Eq,
+    Semi,
     LParen,
     RParen,
     Eof,
@@ -134,6 +140,10 @@ fn lex(src: &str) -> Result<Vec<(Tok, usize)>, CompileError> {
                 out.push((Tok::Comma, start));
                 i += 1;
             }
+            b';' => {
+                out.push((Tok::Semi, start));
+                i += 1;
+            }
             b'(' => {
                 out.push((Tok::LParen, start));
                 i += 1;
@@ -165,7 +175,8 @@ fn lex(src: &str) -> Result<Vec<(Tok, usize)>, CompileError> {
                     out.push((Tok::EqEq, start));
                     i += 2;
                 } else {
-                    return err(start, "expected `==`");
+                    out.push((Tok::Eq, start)); // a `let` binding (`==` is comparison)
+                    i += 1;
                 }
             }
             b'!' => {
@@ -312,6 +323,12 @@ enum Expr {
     Num(f32),
     Feature(u16),
     Param(u16),
+    /// A reference to a shared subexpression in `Parser::bindings` — a `let` binding, or an
+    /// internal binding introduced when desugaring a builtin whose argument is used more than
+    /// once. Emitted by re-emitting the bound expression's code. Sharing (rather than cloning
+    /// the source tree) keeps the AST linear, so nested desugarings can't blow it up
+    /// exponentially; `emit` still caps the *emitted* bytes at the VM's code limit.
+    LetRef(usize),
     Neg(Box<Expr>),
     Not(Box<Expr>),
     Bin(u8, Box<Expr>, Box<Expr>), // opcode for the binary op
@@ -339,6 +356,13 @@ struct Parser<'a> {
     schema: &'a Schema<'a>,
     tables: Vec<Vec<u32>>,
     depth: usize,
+    /// Shared subexpressions, referenced by [`Expr::LetRef`]. A binding may only reference
+    /// earlier bindings (they are pushed in source order and resolved lexically), so the
+    /// reference graph is acyclic and `emit` always terminates.
+    bindings: Vec<Expr>,
+    /// Lexical scope: in-scope `let` names → their binding index. Searched newest-first, so a
+    /// later `let` shadows an earlier one (or a feature/param of the same name).
+    scopes: Vec<(String, usize)>,
 }
 
 impl<'a> Parser<'a> {
@@ -375,10 +399,62 @@ impl<'a> Parser<'a> {
         (self.tables.len() - 1) as u16
     }
 
-    // expr := ternary
+    // expr := let* ternary
     fn parse(&mut self) -> Result<Expr, CompileError> {
-        let e = self.ternary()?;
-        Ok(e)
+        self.expr()
+    }
+
+    /// An expression, optionally prefixed by `let` bindings.
+    fn expr(&mut self) -> Result<Expr, CompileError> {
+        if matches!(self.peek(), Tok::Ident(n) if n == "let") {
+            self.parse_let()
+        } else {
+            self.ternary()
+        }
+    }
+
+    /// `let NAME = EXPR ; BODY` — name a reusable subexpression, in scope over BODY only.
+    /// The value is stored once in `bindings`; each use in BODY becomes an [`Expr::LetRef`], so
+    /// it is evaluated where used (shared in the AST, expanded at emit) rather than recomputed
+    /// by cloning the source tree — which is what keeps a chain of bindings from exploding.
+    fn parse_let(&mut self) -> Result<Expr, CompileError> {
+        // `let` bodies recurse here without passing through `unary`, so guard depth here too.
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            self.depth -= 1;
+            return err(self.at(), "expression nests too deeply");
+        }
+        self.bump(); // `let`
+        let (name, npos) = match self.bump() {
+            (Tok::Ident(n), p) => (n, p),
+            (_, p) => {
+                self.depth -= 1;
+                return err(p, "expected a name after `let`");
+            }
+        };
+        if name == "let" {
+            self.depth -= 1;
+            return err(npos, "`let` is a reserved word");
+        }
+        self.expect(&Tok::Eq, "`=` after the let name")?;
+        let value = self.expr()?;
+        self.expect(&Tok::Semi, "`;` after the let value")?;
+        let idx = self.bindings.len();
+        self.bindings.push(value);
+        self.scopes.push((name, idx));
+        let body = self.expr()?;
+        self.scopes.pop();
+        self.depth -= 1;
+        Ok(body)
+    }
+
+    /// Store `e` as a shared binding and return a cheap `LetRef` leaf to it. Used to desugar a
+    /// builtin whose argument is consumed more than once, so the argument is emitted once per
+    /// use but never *cloned* — a nested desugaring can't explode the AST.
+    fn share(&mut self, e: Expr) -> Expr {
+        let idx = self.bindings.len();
+        self.bindings.push(e);
+        Expr::LetRef(idx)
     }
 
     fn ternary(&mut self) -> Result<Expr, CompileError> {
@@ -487,7 +563,7 @@ impl<'a> Parser<'a> {
             Tok::Num(n) => Ok(Expr::Num(n)),
             Tok::Char(c) => Ok(Expr::Num(c as f32)),
             Tok::LParen => {
-                let e = self.ternary()?;
+                let e = self.expr()?;
                 self.expect(&Tok::RParen, "`)`")?;
                 Ok(e)
             }
@@ -503,6 +579,9 @@ impl<'a> Parser<'a> {
     }
 
     fn name_ref(&mut self, name: &str, pos: usize) -> Result<Expr, CompileError> {
+        if let Some(&(_, idx)) = self.scopes.iter().rev().find(|(n, _)| n == name) {
+            return Ok(Expr::LetRef(idx));
+        }
         if let Some((_, slot)) = self.schema.features.iter().find(|(n, _)| *n == name) {
             return Ok(Expr::Feature(*slot));
         }
@@ -513,7 +592,7 @@ impl<'a> Parser<'a> {
     }
 
     fn arg(&mut self) -> Result<Expr, CompileError> {
-        self.ternary()
+        self.expr()
     }
     fn str_arg(&mut self) -> Result<(String, usize), CompileError> {
         let (t, pos) = self.bump();
@@ -578,6 +657,61 @@ impl<'a> Parser<'a> {
                 let id = self.add_table(&s);
                 Expr::Glyph(Box::new(i), id)
             }
+            // Convenience curves that lower to existing ops. Any argument used more than once
+            // is `share`d, so a nested `mix`/`remap`/`smoothstep` cannot expand exponentially.
+            "mix" => {
+                let a = self.arg()?;
+                self.expect(&Tok::Comma, "`,`")?;
+                let b = self.arg()?;
+                self.expect(&Tok::Comma, "`,`")?;
+                let t = self.arg()?;
+                // a + (b - a) * t  — `a` is used twice.
+                let a = self.share(a);
+                bin(op::ADD, a.clone(), bin(op::MUL, bin(op::SUB, b, a), t))
+            }
+            "remap" => {
+                let x = self.arg()?;
+                self.expect(&Tok::Comma, "`,`")?;
+                let in_lo = self.arg()?;
+                self.expect(&Tok::Comma, "`,`")?;
+                let in_hi = self.arg()?;
+                self.expect(&Tok::Comma, "`,`")?;
+                let out_lo = self.arg()?;
+                self.expect(&Tok::Comma, "`,`")?;
+                let out_hi = self.arg()?;
+                // t = clamp((x - in_lo) / (in_hi - in_lo), 0, 1);  out_lo + (out_hi - out_lo)*t
+                let in_lo = self.share(in_lo); // used twice
+                let t = clamp01(bin(
+                    op::DIV,
+                    bin(op::SUB, x, in_lo.clone()),
+                    bin(op::SUB, in_hi, in_lo),
+                ));
+                let out_lo = self.share(out_lo); // used twice
+                bin(
+                    op::ADD,
+                    out_lo.clone(),
+                    bin(op::MUL, bin(op::SUB, out_hi, out_lo), t),
+                )
+            }
+            "smoothstep" => {
+                let e0 = self.arg()?;
+                self.expect(&Tok::Comma, "`,`")?;
+                let e1 = self.arg()?;
+                self.expect(&Tok::Comma, "`,`")?;
+                let x = self.arg()?;
+                // t = clamp((x - e0) / (e1 - e0), 0, 1);  t*t*(3 - 2t)
+                let e0 = self.share(e0); // used twice
+                let t = self.share(clamp01(bin(
+                    op::DIV,
+                    bin(op::SUB, x, e0.clone()),
+                    bin(op::SUB, e1, e0),
+                ))); // used three times
+                bin(
+                    op::MUL,
+                    bin(op::MUL, t.clone(), t.clone()),
+                    bin(op::SUB, num(3.0), bin(op::MUL, num(2.0), t)),
+                )
+            }
             _ => return err(pos, format!("unknown function `{name}`")),
         };
         self.expect(&Tok::RParen, "`)` to close the call")?;
@@ -592,7 +726,33 @@ fn konst(code: &mut Vec<u8>, v: f32) {
     code.extend_from_slice(&v.to_bits().to_le_bytes());
 }
 
-fn emit(e: &Expr, code: &mut Vec<u8>) {
+fn bin(opcode: u8, a: Expr, b: Expr) -> Expr {
+    Expr::Bin(opcode, Box::new(a), Box::new(b))
+}
+
+fn num(v: f32) -> Expr {
+    Expr::Num(v)
+}
+
+fn clamp01(e: Expr) -> Expr {
+    Expr::Clamp(
+        Box::new(e),
+        Box::new(Expr::Num(0.0)),
+        Box::new(Expr::Num(1.0)),
+    )
+}
+
+/// Emit bytecode for `e`, expanding [`Expr::LetRef`]s against `binds`. Fallible only to enforce
+/// a hard cap on the *emitted* size: `let`/builtin sharing keeps the AST linear, but a
+/// pathological nest of shared references could still try to expand to exponentially many bytes,
+/// so bail cleanly at the VM's code limit instead of building a giant buffer.
+fn emit(e: &Expr, code: &mut Vec<u8>, binds: &[Expr]) -> Result<(), CompileError> {
+    if code.len() >= mosaic_vm::MAX_CODE {
+        return err(
+            0,
+            "compiled program is too large — reduce nesting or reuse subexpressions with `let`",
+        );
+    }
     match e {
         Expr::Num(n) => konst(code, *n),
         Expr::Feature(slot) => {
@@ -603,49 +763,50 @@ fn emit(e: &Expr, code: &mut Vec<u8>) {
             code.push(op::LOADP);
             code.extend_from_slice(&idx.to_le_bytes());
         }
+        Expr::LetRef(i) => emit(&binds[*i], code, binds)?,
         Expr::Neg(a) => {
-            emit(a, code);
+            emit(a, code, binds)?;
             code.push(op::NEG);
         }
         Expr::Not(a) => {
-            emit(a, code);
+            emit(a, code, binds)?;
             code.push(op::NOT);
         }
         Expr::Bin(opcode, a, b) => {
-            emit(a, code);
-            emit(b, code);
+            emit(a, code, binds)?;
+            emit(b, code, binds)?;
             code.push(*opcode);
         }
         Expr::Ne(a, b) => {
-            emit(a, code);
-            emit(b, code);
+            emit(a, code, binds)?;
+            emit(b, code, binds)?;
             code.push(op::EQ);
             code.push(op::NOT);
         }
         Expr::Ternary(c, a, b) | Expr::Select(c, a, b) => {
-            emit(c, code);
-            emit(a, code);
-            emit(b, code);
+            emit(c, code, binds)?;
+            emit(a, code, binds)?;
+            emit(b, code, binds)?;
             code.push(op::SELECT);
         }
         Expr::Op1(opcode, a) => {
-            emit(a, code);
+            emit(a, code, binds)?;
             code.push(*opcode);
         }
         Expr::Op2(opcode, a, b) => {
-            emit(a, code);
-            emit(b, code);
+            emit(a, code, binds)?;
+            emit(b, code, binds)?;
             code.push(*opcode);
         }
         Expr::Clamp(x, lo, hi) => {
-            emit(x, code);
-            emit(lo, code);
-            emit(hi, code);
+            emit(x, code, binds)?;
+            emit(lo, code, binds)?;
+            emit(hi, code, binds)?;
             code.push(op::CLAMP);
         }
         Expr::Ramp(v, id, len) => {
             // idx = floor(clamp(v,0,1) * (len-1) + 0.5); table[idx]
-            emit(v, code);
+            emit(v, code, binds)?;
             konst(code, 0.0);
             konst(code, 1.0);
             code.push(op::CLAMP);
@@ -658,12 +819,13 @@ fn emit(e: &Expr, code: &mut Vec<u8>) {
             code.extend_from_slice(&id.to_le_bytes());
         }
         Expr::Glyph(i, id) => {
-            emit(i, code);
+            emit(i, code, binds)?;
             code.push(op::FLOOR);
             code.push(op::TABLE);
             code.extend_from_slice(&id.to_le_bytes());
         }
     }
+    Ok(())
 }
 
 /// Compile a DSL expression to a validated `mosaic-vm` bytecode program.
@@ -675,6 +837,8 @@ pub fn compile(source: &str, schema: &Schema) -> Result<Vec<u8>, CompileError> {
         schema,
         tables: Vec::new(),
         depth: 0,
+        bindings: Vec::new(),
+        scopes: Vec::new(),
     };
     let ast = p.parse()?;
     if p.peek() != &Tok::Eof {
@@ -682,7 +846,7 @@ pub fn compile(source: &str, schema: &Schema) -> Result<Vec<u8>, CompileError> {
     }
 
     let mut code = Vec::new();
-    emit(&ast, &mut code);
+    emit(&ast, &mut code, &p.bindings)?;
     code.push(op::END);
 
     // Reject anything that would truncate in the u16 header fields below. A glyph set
@@ -764,6 +928,76 @@ mod tests {
         let mut out = vec![0u32; n];
         mosaic_vm::run(&prog, features, n, stride, &mut out).unwrap();
         out
+    }
+
+    #[test]
+    fn mix_remap_smoothstep_lower_correctly() {
+        // mix(60, 80, 0.5) = 70.
+        let b = compile("mix(60.0, 80.0, 0.5)", &ASCII_SCHEMA).unwrap();
+        assert_eq!(run1(&b, &[0.0, 0.0, 0.0], 3), vec![70]);
+
+        // remap(luma, 0,1, 0,100) rescales and clamps outside [0,1].
+        let b = compile("remap(luma, 0.0, 1.0, 0.0, 100.0)", &ASCII_SCHEMA).unwrap();
+        let feats = [0.5, 0.0, 0.0, 2.0, 0.0, 0.0, -1.0, 0.0, 0.0];
+        assert_eq!(run1(&b, &feats, 3), vec![50, 100, 0]);
+
+        // smoothstep(0,1,luma)*100: 0 -> 0, 0.5 -> 50, 1 -> 100 (the S-curve is 0.5 at the midpoint).
+        let b = compile("smoothstep(0.0, 1.0, luma) * 100.0", &ASCII_SCHEMA).unwrap();
+        let feats = [0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 1.0, 0.0, 0.0];
+        assert_eq!(run1(&b, &feats, 3), vec![0, 50, 100]);
+    }
+
+    #[test]
+    fn let_binds_and_scopes() {
+        // A binding used twice equals writing it inline.
+        let a = compile("let d = luma + luma; d + d", &ASCII_SCHEMA).unwrap();
+        let inline = compile("(luma + luma) + (luma + luma)", &ASCII_SCHEMA).unwrap();
+        let feats = [10.0, 0.0, 0.0];
+        assert_eq!(run1(&a, &feats, 3), run1(&inline, &feats, 3));
+        assert_eq!(run1(&a, &feats, 3), vec![40]);
+
+        // A later binding can reference an earlier one.
+        let c = compile("let a = 5.0; let b = a + 1.0; b + a", &ASCII_SCHEMA).unwrap();
+        assert_eq!(run1(&c, &[0.0, 0.0, 0.0], 3), vec![11]);
+
+        // A binding shadows a feature of the same name within its scope (lexical scoping).
+        let d = compile("let luma = 3.0; luma", &ASCII_SCHEMA).unwrap();
+        assert_eq!(run1(&d, &[0.9, 0.0, 0.0], 3), vec![3]);
+    }
+
+    #[test]
+    fn let_reads_cleanly_in_a_facet() {
+        // The edge-or-density Facet, made readable with a binding.
+        let src = r#"let edge = grad_mag; edge > threshold ? glyph(clamp(grad_dir + 2.0, 0, 3), "-/|\\") : ramp(luma, " .:-=+*#%@")"#;
+        let b = compile(src, &ASCII_SCHEMA).unwrap();
+        let feats = [0.5, 0.9, 0.0, 0.5, 0.1, 0.0]; // strong edge, then weak edge
+        let out = run1(&b, &feats, 3);
+        assert_ne!(
+            out[0], out[1],
+            "the two branches must produce different glyphs"
+        );
+    }
+
+    #[test]
+    fn pathological_let_expansion_is_a_clean_error() {
+        // Doubling bindings would expand to ~2^30 bytes; the emit guard rejects it cleanly
+        // (no panic, no OOM) instead of building a giant buffer. The AST stays linear.
+        let mut src = String::from("let a0 = luma;\n");
+        for i in 1..=30 {
+            src.push_str(&format!("let a{i} = a{prev} + a{prev};\n", prev = i - 1));
+        }
+        src.push_str("a30");
+        assert!(
+            compile(&src, &ASCII_SCHEMA).is_err(),
+            "a 2^30-byte expansion must be rejected"
+        );
+    }
+
+    #[test]
+    fn existing_programs_still_compile() {
+        // Nothing that predates let/curves changes: the classic density Facet is unaffected.
+        let b = compile(r#"ramp(luma, " .:-=+*#%@")"#, &ASCII_SCHEMA).unwrap();
+        assert!(mosaic_vm::validate(&b).is_ok());
     }
 
     fn native_density(luma: f32) -> u32 {

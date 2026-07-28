@@ -91,6 +91,9 @@ Effort is relative: **S** = a focused change, **M** = a real feature with tests 
 - **Where:** DSL frontend only. `remap`/`mix`/`smoothstep` lower to existing opcodes (they're expressible today, just unnamed); `let` re-emits or uses `DUP`.
 - **Security / determinism:** **no new VM power** — pure surface. Untouchable invariants.
 - **Cost:** **S.**
+- **Status: shipped.** Glint now has `let` and `mix` / `remap` / `smoothstep`; bindings are
+  shared subexpressions (emitted where used, capped at the VM code limit), and the curve
+  helpers lower to existing ops. No golden drift.
 
 ---
 

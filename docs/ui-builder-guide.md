@@ -356,8 +356,11 @@ highlighting and autocomplete.
 **Operators & builtins**
 
 - **Ops**: `+ - * /`, `< <= > >= == !=`, `&& || !`, unary `-`, ternary `c ? a : b`.
-- **Builtins**: `abs floor trunc`, `min max`, `clamp select`, and the glyph pair —
+- **Builtins**: `abs floor trunc`, `min max`, `clamp select`; curve helpers `mix(a, b, t)`,
+  `remap(x, inLo, inHi, outLo, outHi)`, `smoothstep(e0, e1, x)`; and the glyph pair —
   `ramp(v, "chars")` maps `v ∈ [0,1]` across the ramp; `glyph(i, "chars")` indexes it.
+- **`let`**: `let name = expr; body` names a reusable subexpression — for readability in bigger
+  Facets (it adds no new power; it lowers to the same ops).
 
 ```
 // strong edges get a directional stroke; everything else, a density ramp
