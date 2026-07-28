@@ -423,6 +423,23 @@ exercise a colour-shaded Facet. As in D18, the coupled invariant moved too: the 
 probe range widened `1..=6 → 1..=8` so the stride-8 `ascii` vocabulary stays inside the per-Facet
 certified envelope. Neighbour statistics and multi-scale luma remain the next families on this axis.
 
+### D20 — Sub-cell braille render mode *(settled — capability roadmap item 3)*
+The first "resolve finer" unlock: a `braille` render mode that packs a 2×4 grid of Unicode braille
+dots (`U+2800`–`U+28FF`) into every character cell, for ~8× the spatial resolution of the glyph
+render — dense monochrome photos and crisp line art. Like the colour render modes (`halfblock`,
+tint), it is a **no-Facet** engine render: `render_braille` thresholds each sub-cell's mean
+luminance (a dot is raised where the sub-cell is bright, `≥ 0.5`) and packs the eight dots into the
+codepoint. It touches **neither the DSL, the stride, certificates, nor the gather-probe range** — a
+purely additive output path, wired everywhere `halfblock` is (server `RenderRequest::Braille`,
+`mosaic_wasm::renderBraille`).
+
+Threshold → bitmask → codepoint is exact integer logic over deterministic `f32` sub-cell means, so
+the browser render is bit-identical to the server's — `preview == render` (D9), proven by a new
+`brailleText` column in the render golden that the browser replays via `renderBraille`. Braille
+glyphs are printable and pass `compose_codepoints`' unsafe-glyph mask untouched. A fixed 0.5
+brightness threshold keeps v1 parameter-free (matching `halfblock`); an invert flag or an adaptive
+threshold is an additive follow-up.
+
 ## Open decisions (from the vision — deliberately not yet frozen)
 
 - *All of the vision's open questions — O1, O2, O4, O4.1, O5, and now O3 — are settled;

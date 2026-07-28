@@ -44,8 +44,8 @@ impl FeatureBuffer {
         self.rows
     }
 
-    /// Feature slots per cell (for ASCII L0+L1, `3`: luminance, grad magnitude,
-    /// grad orientation).
+    /// Feature slots per cell (for the ASCII core vocabulary, `8`: luminance, gradient (2),
+    /// position (2), colour (3)).
     #[wasm_bindgen(getter)]
     pub fn stride(&self) -> u32 {
         self.stride
@@ -451,6 +451,26 @@ pub fn render_halfblock(
         fg: hb.fg,
         bg: hb.bg,
     })
+}
+
+/// Render an image to **braille** sub-cell art (no Facet): each cell is a 2×4 grid of braille
+/// dots (`U+2800`–`U+28FF`), so the effective resolution is `2·cols × 4·rows` — roughly 8× the
+/// density render. Coverage is thresholded in the engine, deterministically, so this is
+/// bit-identical to the server render (preview == render). Throws on a bad image or zero cols.
+#[wasm_bindgen(js_name = renderBraille)]
+pub fn render_braille(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    cols: u32,
+    cell_aspect: f32,
+) -> Result<String, JsError> {
+    if cols == 0 {
+        return Err(JsError::new("cols must be greater than zero"));
+    }
+    let image = ImageRef::new(width, height, rgba).map_err(|e| JsError::new(&e.to_string()))?;
+    tessera_ascii::render_braille(&image, cols, cell_aspect)
+        .map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// One mean colour per cell (packed RGBA, row-major) — to tint the glyphs a Facet produced,

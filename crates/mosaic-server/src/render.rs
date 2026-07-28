@@ -76,6 +76,13 @@ pub enum RenderRequest {
         #[serde(default)]
         params: AsciiParams,
     },
+    /// Image → braille sub-cell art (no Facet): each cell is a 2×4 grid of braille dots,
+    /// roughly 8× the density resolution.
+    Braille {
+        input: ImageInput,
+        #[serde(default)]
+        params: AsciiParams,
+    },
 }
 
 /// Where the Facet comes from: an inline base64 wasm module, or a published registry `id`
@@ -205,6 +212,13 @@ enum RenderJob {
         cols: u32,
         cell_aspect: f32,
     },
+    Braille {
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+        cols: u32,
+        cell_aspect: f32,
+    },
     Spectral {
         facet: FacetJob,
         pcm: Vec<f32>,
@@ -253,6 +267,13 @@ async fn build_job(state: &AppState, req: RenderRequest) -> Result<RenderJob, Ap
             })
         }
         RenderRequest::Halfblock { input, params } => Ok(RenderJob::Halfblock {
+            rgba: decode_b64(&input.rgba, "input.rgba")?,
+            width: input.width,
+            height: input.height,
+            cols: params.cols,
+            cell_aspect: params.cell_aspect,
+        }),
+        RenderRequest::Braille { input, params } => Ok(RenderJob::Braille {
             rgba: decode_b64(&input.rgba, "input.rgba")?,
             width: input.width,
             height: input.height,
@@ -395,6 +416,33 @@ fn run_job(sandbox: &Sandbox, interp: &Facet, job: RenderJob) -> Result<RenderOk
                 glyph: Some(tessera_ascii::color::HALF_BLOCK),
                 fg: Some(hb.fg),
                 bg: Some(hb.bg),
+            })
+        }
+        RenderJob::Braille {
+            rgba,
+            width,
+            height,
+            cols,
+            cell_aspect,
+        } => {
+            if cols == 0 {
+                return Err(ApiError::bad_request(
+                    "params.cols must be greater than zero",
+                ));
+            }
+            let image = ImageRef::new(width, height, &rgba)
+                .map_err(|e| ApiError::bad_request(e.to_string()))?;
+            let grid = Grid::new(width, height, cols, cell_aspect);
+            let text = tessera_ascii::render_braille(&image, cols, cell_aspect)
+                .map_err(|e| ApiError::bad_request(e.to_string()))?;
+            Ok(RenderOk {
+                cols: grid.cols(),
+                rows: grid.rows(),
+                text: Some(text),
+                colors: None,
+                glyph: None,
+                fg: None,
+                bg: None,
             })
         }
         RenderJob::Spectral {

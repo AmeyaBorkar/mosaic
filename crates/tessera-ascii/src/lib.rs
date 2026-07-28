@@ -136,6 +136,80 @@ pub fn render_dither(image: &ImageRef, cols: u32, cell_aspect: f32) -> Result<St
     Ok(compose_codepoints(buf.cols, buf.rows, &out))
 }
 
+/// Render an image to **braille** sub-cell art — no Facet. Each terminal cell becomes a 2×4
+/// grid of braille dots (`U+2800`–`U+28FF`), so the effective resolution is `2·cols × 4·rows`,
+/// roughly 8× the density render. A dot is raised where its sub-cell's mean luminance is bright
+/// (`≥ 0.5`) — the same bright→dense convention as the density ramp. Deterministic integer
+/// thresholding over exact `f32` means, so the browser render (`renderBraille`) is bit-identical
+/// (preview == render). Braille glyphs are printable and pass `compose_codepoints` unmasked.
+pub fn render_braille(image: &ImageRef, cols: u32, cell_aspect: f32) -> Result<String, Error> {
+    if cols == 0 {
+        return Err(Error::ZeroColumns);
+    }
+    let grid = Grid::new(image.width(), image.height(), cols, cell_aspect);
+    let cells = (grid.cols() as usize)
+        .checked_mul(grid.rows() as usize)
+        .ok_or(Error::DimensionOverflow)?;
+    if cells > MAX_CELLS {
+        return Err(Error::TooManyCells {
+            cells,
+            max: MAX_CELLS,
+        });
+    }
+    // Unicode braille dot bit per sub-cell `[row][col]` of the 2×4 grid: the left column holds
+    // dots 1,2,3,7 (bits 0,1,2,6), the right column dots 4,5,6,8 (bits 3,4,5,7).
+    const DOT_BITS: [[u32; 2]; 4] = [[0, 3], [1, 4], [2, 5], [6, 7]];
+    let mut codepoints = Vec::with_capacity(cells);
+    for row in 0..grid.rows() {
+        for col in 0..grid.cols() {
+            let (x0, x1, y0, y1) = grid.cell_bounds(col, row);
+            let mut bits = 0u32;
+            for sr in 0..4u32 {
+                let (sy0, sy1) = sub_span(y0, y1, sr, 4);
+                for sc in 0..2u32 {
+                    let (sx0, sx1) = sub_span(x0, x1, sc, 2);
+                    if sub_cell_is_lit(image, sx0, sx1, sy0, sy1) {
+                        bits |= 1 << DOT_BITS[sr as usize][sc as usize];
+                    }
+                }
+            }
+            codepoints.push(0x2800 + bits);
+        }
+    }
+    Ok(compose_codepoints(grid.cols(), grid.rows(), &codepoints))
+}
+
+/// The `idx`-th of `div` equal integer sub-spans of `[lo, hi)`, as `[a, b)`. Uses a `u64`
+/// intermediate so the width × index product cannot overflow `u32` on a huge image.
+fn sub_span(lo: u32, hi: u32, idx: u32, div: u32) -> (u32, u32) {
+    let len = u64::from(hi - lo);
+    let a = lo + (len * u64::from(idx) / u64::from(div)) as u32;
+    let b = lo + (len * u64::from(idx + 1) / u64::from(div)) as u32;
+    (a, b)
+}
+
+/// Whether a braille sub-cell reads as "lit": its mean luminance is `≥ 0.5`. An empty span
+/// (a sub-cell narrower than a pixel) samples the nearest pixel clamped inside the image, so a
+/// grid finer than the image never panics — it just repeats edge samples.
+fn sub_cell_is_lit(image: &ImageRef, x0: u32, x1: u32, y0: u32, y1: u32) -> bool {
+    let mut sum = 0.0f32;
+    let mut count = 0u32;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            sum += image.luma(x, y);
+            count += 1;
+        }
+    }
+    let mean = if count > 0 {
+        sum / count as f32
+    } else {
+        let px = x0.min(image.width().saturating_sub(1));
+        let py = y0.min(image.height().saturating_sub(1));
+        image.luma(px, py)
+    };
+    mean >= 0.5
+}
+
 /// Errors returned by the engine. Malformed input is always a value, never a panic.
 pub mod error {
     /// Everything that can go wrong rendering an image to ASCII.
@@ -1245,6 +1319,66 @@ mod tests {
         assert!(
             distinct.len() > 1,
             "cells must differ so the per-cell region is actually exercised"
+        );
+    }
+
+    #[test]
+    fn braille_maps_brightness_to_dots() {
+        // Bright sub-cells raise dots, dark ones don't. Solid white -> every dot -> ⣿ (U+28FF);
+        // solid black -> no dots -> ⠀ (U+2800). Every glyph stays in the braille block.
+        let white = solid(8, 8, (255, 255, 255));
+        let out = render_braille(&ImageRef::new(8, 8, &white).unwrap(), 4, 1.0).unwrap();
+        assert!(out.chars().filter(|c| *c != '\n').all(|c| c == '\u{28FF}'));
+
+        let black = solid(8, 8, (0, 0, 0));
+        let out = render_braille(&ImageRef::new(8, 8, &black).unwrap(), 4, 1.0).unwrap();
+        assert!(out.chars().filter(|c| *c != '\n').all(|c| c == '\u{2800}'));
+        for line in out.lines() {
+            assert!(line.chars().all(|c| ('\u{2800}'..='\u{28FF}').contains(&c)));
+        }
+
+        // Bit layout: a 2×4 image is exactly one cell of 1-pixel sub-cells, so lighting one
+        // pixel raises exactly one braille dot. Check all eight against the Unicode dot
+        // numbering derived *independently* of the engine's `DOT_BITS` table, so a permuted
+        // mapping (e.g. swapping dots 7 and 8) can't slip through self-consistently.
+        assert_eq!(
+            (
+                Grid::new(2, 4, 1, 2.0).cols(),
+                Grid::new(2, 4, 1, 2.0).rows()
+            ),
+            (1, 1)
+        );
+        for sr in 0..4u32 {
+            for sc in 0..2u32 {
+                // Unicode braille: left column holds dots 1,2,3,7 (bits 0,1,2,6); the right
+                // column dots 4,5,6,8 (bits 3,4,5,7).
+                let expected_bit: u32 = match (sr, sc) {
+                    (0, 0) => 0,
+                    (1, 0) => 1,
+                    (2, 0) => 2,
+                    (3, 0) => 6,
+                    (0, 1) => 3,
+                    (1, 1) => 4,
+                    (2, 1) => 5,
+                    _ => 7,
+                };
+                let mut px = vec![0u8; 2 * 4 * 4];
+                let i = ((sr * 2 + sc) * 4) as usize;
+                px[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
+                let out = render_braille(&ImageRef::new(2, 4, &px).unwrap(), 1, 2.0).unwrap();
+                let expected = char::from_u32(0x2800 + (1u32 << expected_bit)).unwrap();
+                assert_eq!(
+                    out.trim_end_matches('\n').chars().next().unwrap(),
+                    expected,
+                    "sub-cell (row {sr}, col {sc}) must light braille bit {expected_bit}"
+                );
+            }
+        }
+
+        // Zero columns is a clean error, never a panic.
+        assert_eq!(
+            render_braille(&ImageRef::new(8, 8, &white).unwrap(), 0, 1.0),
+            Err(Error::ZeroColumns)
         );
     }
 

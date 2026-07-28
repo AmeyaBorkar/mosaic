@@ -14,7 +14,8 @@ use std::fs;
 use std::path::Path;
 
 use tessera_ascii::{
-    Grid, ImageRef, Options, feature, render_ascii, render_dither, render_structural,
+    Grid, ImageRef, Options, feature, render_ascii, render_braille, render_dither,
+    render_structural,
 };
 
 /// Deterministic xorshift PRNG (matches the engine's test PRNG) so the golden is
@@ -64,6 +65,8 @@ fn main() {
         let structural_text =
             render_structural(&img, opts.cols, opts.cell_aspect).expect("render structural");
         let dither_text = render_dither(&img, opts.cols, opts.cell_aspect).expect("render dither");
+        let braille_text =
+            render_braille(&img, opts.cols, opts.cell_aspect).expect("render braille");
         let grid = Grid::new(case.w, case.h, opts.cols, opts.cell_aspect);
         let feats = feature::extract(&img, &grid).expect("extract features");
 
@@ -86,8 +89,12 @@ fn main() {
             json_escape(&structural_text)
         ));
         json.push_str(&format!(
-            "      \"ditherText\": \"{}\"\n",
+            "      \"ditherText\": \"{}\",\n",
             json_escape(&dither_text)
+        ));
+        json.push_str(&format!(
+            "      \"brailleText\": \"{}\"\n",
+            json_escape(&braille_text)
         ));
         json.push_str(if ci + 1 == cases.len() {
             "    }\n"

@@ -102,6 +102,7 @@ The **engine** decides what input is read and what feature vocabulary a Facet se
 | `ascii-structural` | Image (RGBA) | 64     | L2 structural patch vocabulary          | Yes            |
 | `spectral`         | Audio PCM    | 1      | `band_energy`                           | Yes            |
 | `halfblock`        | Image (RGBA) | —      | — (pure colour, computed by the engine) | No             |
+| `braille`          | Image (RGBA) | —      | — (2×4 sub-cell dots, computed by the engine) | No       |
 
 ### Colour, three ways
 
@@ -117,6 +118,13 @@ Facet — that's how colour stays inside `preview == render`.
 
 > **Packed colour format.** Colours come back as `u32`, packed `r | g<<8 | b<<16 | a<<24`.
 > To paint: `r = c & 255`, `g = (c>>8) & 255`, `b = (c>>16) & 255`, `a = (c>>>24) & 255`.
+
+### Sub-cell resolution — braille
+
+- **Braille** (`braille` engine / `renderBraille`) — no Facet. Each cell becomes a 2×4 grid of
+  braille dots (`⠀`–`⣿`, U+2800–U+28FF), a dot raised where its sub-cell is bright — roughly **8×**
+  the spatial resolution of the glyph render, for dense monochrome detail and crisp line art. The
+  output is plain text (one braille glyph per cell), so it drops straight into a `<pre>`.
 
 ---
 
@@ -198,6 +206,7 @@ You never re-implement rendering — you call these.
 | `extract_features(rgba, w, h, cols, cellAspect)` | `{ cols, rows, ncells, stride, data }` | Run the engine over an image → the per-cell feature buffer. Call `.free()` when done. |
 | `compose(cols, rows, tokens)` | `string` | Glyph codepoints → the text grid (safe against untrusted glyphs). |
 | `renderHalfblock(rgba, w, h, cols, cellAspect)` | `{ cols, rows, fg, bg, glyph }` | Coloured pixel-art, no Facet. `fg`/`bg` are packed `u32` per cell. |
+| `renderBraille(rgba, w, h, cols, cellAspect)` | `string` | Braille sub-cell art, no Facet — 2×4 dots per cell, ~8× resolution. |
 | `extractColors(rgba, w, h, cols, cellAspect)` | `u32[]` | Per-cell mean colour, to tint a glyph render. |
 
 `manifestJson` parses to `{ engine, stride, params: [{ name, value, index }] }` — one entry per

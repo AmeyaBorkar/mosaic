@@ -179,3 +179,18 @@ test("full dither (propagation) browser pipeline matches the native render", asy
     }
   }
 });
+
+test("braille sub-cell browser render matches the native render", () => {
+  // No Facet: the engine thresholds sub-cell coverage directly, so renderBraille in the
+  // browser must be bit-identical to the native render_braille the golden records.
+  for (const c of golden.cases) {
+    const text = wasm.renderBraille(
+      Uint8Array.from(c.rgba),
+      c.width,
+      c.height,
+      c.cols,
+      golden.cellAspect,
+    );
+    assert.equal(text, c.brailleText, `${c.name}: braille browser render != native`);
+  }
+});

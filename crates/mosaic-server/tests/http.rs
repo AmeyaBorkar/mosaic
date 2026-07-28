@@ -495,6 +495,29 @@ async fn render_halfblock_returns_colored_cells() {
 }
 
 #[tokio::test]
+async fn render_braille_returns_dot_text() {
+    let (w, h) = (8u32, 8u32);
+    // Solid white: every sub-cell is lit, so each cell is the full braille glyph ⣿ (U+28FF).
+    let rgba = vec![255u8; (w * h * 4) as usize];
+    let body = serde_json::json!({
+        "engine": "braille",
+        "input": { "rgba": STANDARD.encode(&rgba), "width": w, "height": h },
+        "params": { "cols": 4, "cellAspect": 1.0 }
+    });
+    let resp = test_app()
+        .oneshot(post_json("/v1/render", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let out = json_body(resp).await;
+    let text = out["text"].as_str().unwrap();
+    assert!(text.chars().filter(|c| *c != '\n').all(|c| c == '\u{28FF}'));
+    assert!(out["glyph"].is_null()); // braille is plain text, not a half-block glyph
+    assert!(out["fg"].is_null());
+    assert_eq!(text.lines().count() as u64, out["rows"].as_u64().unwrap());
+}
+
+#[tokio::test]
 async fn render_ascii_with_color_adds_per_cell_colors() {
     let (w, h) = (8u32, 8u32);
     let rgba = vec![200u8; (w * h * 4) as usize];

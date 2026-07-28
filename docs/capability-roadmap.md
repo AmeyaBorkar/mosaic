@@ -100,6 +100,12 @@ Effort is relative: **S** = a focused change, **M** = a real feature with tests 
 - **Security / determinism:** integer coverage → glyph, exact. Safe.
 - **Cost:** **M.**
 - **Proven:** `halfblock` already does sub-cell (2× vertical, two colours) — this generalizes the same idea to denser cells.
+- **Status: braille shipped.** A `braille` render mode packs a 2×4 dot grid (`U+2800`–`U+28FF`)
+  per cell — ~8× resolution, dense monochrome. A no-Facet engine render (like `halfblock`): a dot
+  is raised where its sub-cell is bright, so it touches no stride/DSL/certificate surface. `preview
+  == render` holds (integer threshold → codepoint; a new `brailleText` golden the browser replays
+  via `renderBraille`). Wired server-side (`RenderRequest::Braille`) and in the browser. Quadrant /
+  sextant blocks and an invert/adaptive threshold are additive follow-ups.
 
 ### 4 · `let` bindings + `remap` / `smoothstep` / `mix`
 - **Unlocks:** not new art but a higher **complexity ceiling** — authors can write the bigger Facets that items 1–3 make possible without them collapsing into unreadable repeated subexpressions.
