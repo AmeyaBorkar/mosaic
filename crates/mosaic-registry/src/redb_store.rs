@@ -220,12 +220,12 @@ mod tests {
             created_at: 7,
             artifact: FacetArtifact::Program {
                 engine: "ascii".to_string(),
-                stride: 5,
+                stride: 8,
                 program_sha256: "ef".repeat(32),
                 certificate: ProgramCertificate {
                     certify_version: 1,
                     program_sha256: "ef".repeat(32),
-                    stride: 5,
+                    stride: 8,
                     probes: vec![],
                 },
             },
@@ -238,7 +238,7 @@ mod tests {
         match got.artifact {
             FacetArtifact::Program { engine, stride, .. } => {
                 assert_eq!(engine, "ascii");
-                assert_eq!(stride, 5);
+                assert_eq!(stride, 8);
             }
             FacetArtifact::Wasm { .. } => panic!("expected a program artifact"),
         }

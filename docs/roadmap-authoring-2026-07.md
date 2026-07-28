@@ -37,7 +37,7 @@ golden gates, whole repo green); refuse false trade-offs; truth-telling; robust 
 
 - **A1** `mosaic-wasm`: `compile_facet(engine, src, paramsJson) -> { program, manifestJson }`
   — a wasm binding of `mosaic-dsl`. `engine` selects the feature vocabulary: `ascii`
-  (stride 5: luma, grad_mag, grad_dir, u, v), `spectral` (stride 1: band_energy). Manifest = the
+  (stride 8: luma, grad_mag, grad_dir, u, v, r, g, b), `spectral` (stride 1: band_energy). Manifest = the
   params (name, value, index) + engine + stride. Compile errors throw with message + position.
   Golden: browser-compiled bytecode == native `mosaic_dsl::compile` (same crate → identical).
 - **A2** `patch_params`: overwrite the params section by index. Native (`mosaic-vm`) +

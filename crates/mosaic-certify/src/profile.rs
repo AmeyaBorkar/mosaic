@@ -125,7 +125,7 @@ pub enum RejectionCode {
     /// The program does not end with exactly one value on the stack.
     BadFinalStack,
     /// The program's declared feature stride does not match the engine it is published for
-    /// (e.g. a stride-5 image program submitted for the stride-1 spectral engine).
+    /// (e.g. a stride-8 image program submitted for the stride-1 spectral engine).
     ProgramStrideMismatch,
     /// The submitted engine name is not one this build renders.
     UnknownEngine,

@@ -116,12 +116,12 @@ mod tests {
     fn program_artifact() -> FacetArtifact {
         FacetArtifact::Program {
             engine: "ascii".to_string(),
-            stride: 5,
+            stride: 8,
             program_sha256: "cd".repeat(32),
             certificate: ProgramCertificate {
                 certify_version: 1,
                 program_sha256: "cd".repeat(32),
-                stride: 5,
+                stride: 8,
                 probes: vec![],
             },
         }

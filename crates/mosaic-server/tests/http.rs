@@ -518,18 +518,21 @@ async fn render_ascii_with_color_adds_per_cell_colors() {
 // --- DSL program Facets: publish, moderate, render by id, fetch bytecode. ---
 
 const ASCII_SCHEMA: mosaic_dsl::Schema = mosaic_dsl::Schema {
-    stride: 5,
+    stride: 8,
     features: &[
         ("luma", 0),
         ("grad_mag", 1),
         ("grad_dir", 2),
         ("u", 3),
         ("v", 4),
+        ("r", 5),
+        ("g", 6),
+        ("b", 7),
     ],
     params: &[("threshold", 0.6)],
 };
 
-/// A real authored DSL program: a density ramp over the ASCII (stride-5) vocabulary.
+/// A real authored DSL program: a density ramp over the ASCII (stride-8) vocabulary.
 fn ascii_program() -> Vec<u8> {
     mosaic_dsl::compile(r#"ramp(luma, " .:-=+*#%@")"#, &ASCII_SCHEMA).unwrap()
 }
@@ -555,8 +558,8 @@ async fn publish_program_certifies_and_stores() {
     assert_eq!(body["facet"]["state"], "certified");
     assert_eq!(body["facet"]["artifact"]["kind"], "program");
     assert_eq!(body["facet"]["artifact"]["engine"], "ascii");
-    assert_eq!(body["facet"]["artifact"]["stride"], 5);
-    assert_eq!(body["facet"]["artifact"]["certificate"]["stride"], 5);
+    assert_eq!(body["facet"]["artifact"]["stride"], 8);
+    assert_eq!(body["facet"]["artifact"]["certificate"]["stride"], 8);
     assert!(
         body["facet"]["artifact"]["programSha256"]
             .as_str()
@@ -576,7 +579,7 @@ async fn publish_program_rejects_unknown_engine() {
 
 #[tokio::test]
 async fn publish_program_rejects_stride_mismatch() {
-    // A stride-5 (ascii) program published for the stride-1 spectral engine is refused.
+    // A stride-8 (ascii) program published for the stride-1 spectral engine is refused.
     let app = test_app();
     let resp = publish_program(&app, "author-token", "Wrong Engine", "spectral").await;
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);

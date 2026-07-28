@@ -67,7 +67,7 @@ Admit and certify a Facet. Body: `{ "wasm": "<base64 module>" }`.
 Render an input through a Facet, natively. The request is tagged by `engine`:
 
 ```jsonc
-// image → ASCII (L0+L1 density/edge + position vocabulary, stride 5)
+// image → ASCII (L0+L1 density/edge + position + colour vocabulary, stride 8)
 {
   "engine": "ascii",                       // or "ascii-structural" (L2, stride 64)
   "facet": { "inline": "<base64 module>" },

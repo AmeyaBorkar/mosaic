@@ -77,7 +77,7 @@ Effort is relative: **S** = a focused change, **M** = a real feature with tests 
   `preview == render` holds unchanged — proven by the reblessed render/DSL/program-cert goldens
   and the browser-parity replays, which now exercise a position-shaded Facet. The gather-cert
   probe range was widened to keep the engine's real stride inside the certified envelope. Raw
-  integer `cx`/`cy` stay a trivial additive extension (stride 5 → 7) if a use case ever needs
+  integer `cx`/`cy` stay a trivial additive extension (two more slots) if a use case ever needs
   absolute, resolution-dependent periodicity.
 
 ### 2 · Richer engine features (colour, neighbour, multi-scale)
@@ -86,6 +86,13 @@ Effort is relative: **S** = a focused change, **M** = a real feature with tests 
 - **Security / determinism:** all in trusted, already-deterministic engine code. No budget spent.
 - **Cost:** **M** per feature family (extraction + goldens + browser parity).
 - **Proven:** the `ascii-structural` stride-64 vocabulary is exactly this pattern — evidence it works and extends cheaply.
+- **Status: colour shipped.** The `ascii` engine now emits mean cell colour `r`/`g`/`b` (each
+  normalized to `[0, 1]`, stride 5 → 8) — the *same* deterministic integer mean the tint /
+  half-block render uses, so a Facet reads exactly the colour it would be tinted with, and Glint
+  reads `r`/`g`/`b` by name. No new DSL syntax and no new VM ops; `preview == render` holds
+  (reblessed goldens + browser replays now exercise a colour-shaded Facet, and the gather-cert
+  probe range tracks the new stride). Neighbour statistics (variance, structure tensor) and
+  multi-scale luma remain the next families on this axis.
 
 ### 3 · Sub-cell output — braille (2×4) + quadrant/sextant blocks
 - **Unlocks:** ~8× spatial resolution per cell, dense photographic grayscale, crisp high-res line drawings, block "pixel" art.

@@ -1003,8 +1003,8 @@ mod tests {
     #[test]
     fn position_features_resolve_and_run() {
         // The `ascii` engine's spatial slots `u` (3) and `v` (4) resolve by name and load
-        // independently. A stride-5 schema mirrors the real engine vocabulary
-        // (`mosaic_wasm::engine_schema`); the compiler itself is engine-agnostic.
+        // independently. This stride-5 schema exercises the position slots; the compiler is
+        // engine-agnostic, so the real ascii vocabulary being larger (stride 8) is immaterial.
         const POS_SCHEMA: Schema = Schema {
             stride: 5,
             features: &[

@@ -211,17 +211,18 @@ fn probe_suite(abi: AbiKind) -> Vec<ProbeSpec> {
     }
 }
 
-/// Gather probes across a representative range of strides 1..=6, one row of cells each — a
+/// Gather probes across a representative range of strides 1..=8, one row of cells each — a
 /// gather Facet reads fixed slots, so proving it across these strides pins its stride-invariant
 /// behaviour for the browser to replay. The range spans the per-cell gather engines whose parity
-/// rests on these per-Facet probes: `spectral` (stride 1) and `ascii` (stride 5), with spread on
-/// either side. It deliberately does *not* reach `ascii-structural` (stride 64): that engine's
+/// rests on these per-Facet probes: `spectral` (stride 1) and `ascii` (stride 8) — the smallest
+/// and largest per-cell gather engine strides — plus every stride between. It deliberately does
+/// *not* reach `ascii-structural` (stride 64): that engine's
 /// browser≡native parity is proven end-to-end by the render golden's `structuralText` — one
 /// `glyph-atlas` matcher compiled both ways — so a probe at 64 would be redundant here, not a
 /// missing guarantee.
 fn gather_probes() -> Vec<ProbeSpec> {
     let mut specs = Vec::new();
-    for &stride in &[1u32, 2, 3, 4, 5, 6] {
+    for &stride in &[1u32, 2, 3, 4, 5, 6, 7, 8] {
         let ncells = 24u32;
         let features = probe_features(
             PROBE_SEED ^ (0x9E37_79B9 * u64::from(stride)),
@@ -336,7 +337,7 @@ mod tests {
         assert_eq!(cert.certify_version, CERTIFY_VERSION);
         assert_eq!(cert.abi_kind, AbiKind::Gather);
         assert_eq!(cert.wasm_sha256.len(), 64);
-        assert_eq!(cert.probes.len(), 6);
+        assert_eq!(cert.probes.len(), 8);
         // A well-formed ramp Facet produces tokens on every in-bounds probe.
         for probe in &cert.probes {
             assert!(

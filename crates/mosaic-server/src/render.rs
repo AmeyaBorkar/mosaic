@@ -11,7 +11,7 @@
 //! Because every step is the same source as the preview, a server render is bit-identical
 //! to what the browser shows — this endpoint is the "truth" render for sharing and export.
 //!
-//! The **engine** selects the feature vocabulary (and thus the stride): `ascii` (stride 5),
+//! The **engine** selects the feature vocabulary (and thus the stride): `ascii` (stride 8),
 //! `ascii-structural` (stride 64), `spectral` (stride 1). A wasm Facet's certified **ABI kind**
 //! selects gather vs propagation; a DSL program is always gather. The Facet comes either
 //! inline (a base64 wasm module, admitted before it runs) or by `id` from the registry (a
@@ -38,7 +38,7 @@ use crate::error::ApiError;
 /// declares; the render path itself compares against the extractor's actual stride.
 pub(crate) fn engine_stride(engine: &str) -> Option<u32> {
     match engine {
-        "ascii" => Some(5),
+        "ascii" => Some(8),
         "ascii-structural" => Some(64),
         "spectral" => Some(1),
         _ => None,
@@ -49,7 +49,7 @@ pub(crate) fn engine_stride(engine: &str) -> Option<u32> {
 #[derive(Deserialize)]
 #[serde(tag = "engine", rename_all = "kebab-case")]
 pub enum RenderRequest {
-    /// Image → ASCII, L0+L1 density/edge + position vocabulary (stride 5).
+    /// Image → ASCII, L0+L1 density/edge + position + colour vocabulary (stride 8).
     Ascii {
         facet: FacetSource,
         input: ImageInput,

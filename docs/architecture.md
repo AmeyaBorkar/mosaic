@@ -114,7 +114,7 @@ out of that one nearest-glyph rule. The atlas + matcher live in a single `no_std
 `glyph-atlas` crate compiled into **both** the native engine and the untrusted wasm
 Facet (`facets/structural`) — one matcher, not two that could drift. L2 is opt-in
 (only structural Facets pay the 64-slot stride, via a separate `extract_structural`;
-density/edge Facets keep the stride-5 L0+L1+position path). Proven native≡sandboxed over 64
+density/edge Facets keep the stride-8 L0+L1+position+colour path). Proven native≡sandboxed over 64
 random images and browser≡native end-to-end.
 
 ### D7 — Facet runtime: wasmtime, pinned current *(settled)*
@@ -404,6 +404,24 @@ certified envelope. (The stride-64 `ascii-structural` path sits outside that ran
 browser≡native parity is proven end-to-end by the render golden's `structuralText`, one matcher
 compiled both ways, not by these per-Facet probes.) Raw integer `cx`/`cy` remain a trivial
 additive extension (stride 5 → 7) if absolute, resolution-dependent periodicity is ever wanted.
+
+### D19 — Cell colour in the ASCII vocabulary (`r`/`g`/`b`) *(settled — capability roadmap item 2, colour family)*
+The second "see more" unlock, and the first slice of the "richer engine features" axis: the
+`ascii` engine now measures each cell's **mean colour** as a self-only `Vector{3}` `color` —
+`r`, `g`, `b`, each normalized to `[0, 1]` — appended after position (stride **5 → 8**, slots
+5–7). Glint reads them as `r`/`g`/`b`; again **no new VM ops**. It unlocks colour-aware styling —
+duotone by hue, warm/cool glyph sets (`r - b`), chroma-driven density — the input side that
+complements the colour *output* modes (half-block, tint).
+
+Crucially it is **not** a second colour path: the feature reuses the exact deterministic integer
+mean (`color::mean_color`) that the tint and half-block renders already use, so a Facet reads
+*precisely* the colour it would be tinted with — one source of truth, asserted in
+`color_slots_are_the_normalized_cell_mean`. Each channel is an exact 0..255 integer and `/255.0`
+is correctly rounded, so the extractor stays bit-identical native vs wasm and `preview == render`
+(D9) holds — proven by the reblessed render/DSL/program-cert goldens, whose browser replays now
+exercise a colour-shaded Facet. As in D18, the coupled invariant moved too: the gather-certificate
+probe range widened `1..=6 → 1..=8` so the stride-8 `ascii` vocabulary stays inside the per-Facet
+certified envelope. Neighbour statistics and multi-scale luma remain the next families on this axis.
 
 ## Open decisions (from the vision — deliberately not yet frozen)
 

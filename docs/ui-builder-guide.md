@@ -98,7 +98,7 @@ The **engine** decides what input is read and what feature vocabulary a Facet se
 
 | Engine             | Input        | Stride | Feature vocabulary                      | Needs a Facet? |
 |--------------------|--------------|:------:|-----------------------------------------|:--------------:|
-| `ascii`            | Image (RGBA) | 5      | `luma`, `grad_mag`, `grad_dir`, `u`, `v` | Yes            |
+| `ascii`            | Image (RGBA) | 8      | `luma`, `grad_mag`, `grad_dir`, `u`, `v`, `r`, `g`, `b` | Yes            |
 | `ascii-structural` | Image (RGBA) | 64     | L2 structural patch vocabulary          | Yes            |
 | `spectral`         | Audio PCM    | 1      | `band_energy`                           | Yes            |
 | `halfblock`        | Image (RGBA) | —      | — (pure colour, computed by the engine) | No             |
@@ -295,7 +295,7 @@ anyone else).*
 { "facet": {
     "id": "...", "name": "Sketchy Ink", "author": "alice",
     "state": "certified", "createdAt": 1730000000,
-    "artifact": { "kind": "program", "engine": "ascii", "stride": 5,
+    "artifact": { "kind": "program", "engine": "ascii", "stride": 8,
                   "programSha256": "...", "certificate": { /* ... */ } } } }
 ```
 
@@ -348,9 +348,12 @@ highlighting and autocomplete.
 
 **Names & literals**
 
-- **Features** (by engine): `luma`, `grad_mag`, `grad_dir`, `u`, `v` for `ascii`; `band_energy`
-  for `spectral`. `u`/`v` are the cell's normalized centre position, each in `(0, 1)` — use them
-  for gradients, vignettes, and spatial masks (e.g. `abs(u - 0.5)` for a horizontal falloff).
+- **Features** (by engine): `luma`, `grad_mag`, `grad_dir`, `u`, `v`, `r`, `g`, `b` for `ascii`;
+  `band_energy` for `spectral`. `u`/`v` are the cell's normalized centre position, each in
+  `(0, 1)` — use them for gradients, vignettes, and spatial masks (e.g. `abs(u - 0.5)` for a
+  horizontal falloff). `r`/`g`/`b` are the cell's mean colour, each in `[0, 1]` — use them for
+  colour-aware art (e.g. `r - b` for warm/cool, `max(r, max(g, b)) - min(r, min(g, b))` for
+  chroma-driven density).
 - **Params**: any name you declare — the tweakable knobs.
 - **Numbers**: `0.6`, `9`, `-1.5`. **Chars**: `'@'`. **Strings**: `" .:-=+*#%@"` (glyph sets).
 

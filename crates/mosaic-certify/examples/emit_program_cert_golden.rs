@@ -26,15 +26,18 @@ use serde::Serialize;
 const FACET_INTERP: &[u8] =
     include_bytes!("../../../packages/facet-abi/test/fixtures/facet_interp.wasm");
 
-// The ASCII vocabulary (stride 5), matching the server's `ascii` engine.
+// The ASCII vocabulary (stride 8), matching the server's `ascii` engine.
 const ASCII_SCHEMA: Schema = Schema {
-    stride: 5,
+    stride: 8,
     features: &[
         ("luma", 0),
         ("grad_mag", 1),
         ("grad_dir", 2),
         ("u", 3),
         ("v", 4),
+        ("r", 5),
+        ("g", 6),
+        ("b", 7),
     ],
     params: &[("threshold", 0.6)],
 };
@@ -93,12 +96,12 @@ fn main() {
                 &interp,
                 r#"grad_mag > threshold ? glyph(clamp(grad_dir * 1.27 + 2.0, 0, 3), "-/|\\") : ramp(luma, " .:-=+*#%@")"#,
             ),
-            // A spatial Facet reading the position slots u/v — a corner-shaded density
-            // ramp — so the certificate's probes exercise the new features.
+            // A spatial + colour Facet reading u/v and r/g/b — a corner- and colour-shaded
+            // density ramp — so the certificate's probes exercise the new features.
             case(
                 &sandbox,
                 &interp,
-                r#"ramp(clamp(luma - 0.5 * u + 0.3 * v, 0, 1), " .:-=+*#%@")"#,
+                r#"ramp(clamp(luma - 0.5 * u + 0.3 * v + 0.2 * r - 0.1 * g - 0.2 * b, 0, 1), " .:-=+*#%@")"#,
             ),
         ],
     };

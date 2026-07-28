@@ -216,13 +216,16 @@ mod tests {
     use mosaic_dsl::{Schema, compile};
 
     const ASCII_SCHEMA: Schema = Schema {
-        stride: 5,
+        stride: 8,
         features: &[
             ("luma", 0),
             ("grad_mag", 1),
             ("grad_dir", 2),
             ("u", 3),
             ("v", 4),
+            ("r", 5),
+            ("g", 6),
+            ("b", 7),
         ],
         params: &[("threshold", 0.6)],
     };
@@ -246,7 +249,7 @@ mod tests {
         let program = compile(r#"ramp(luma, " .:-=+*#%@")"#, &ASCII_SCHEMA).unwrap();
         let cert = certified(&program);
         assert_eq!(cert.certify_version, CERTIFY_VERSION);
-        assert_eq!(cert.stride, 5);
+        assert_eq!(cert.stride, 8);
         assert_eq!(cert.program_sha256, sha256_hex(&program));
         assert_eq!(cert.program_sha256.len(), 64);
         assert_eq!(cert.probes.len(), 4);
@@ -256,7 +259,7 @@ mod tests {
                 "density program unexpectedly trapped on {}",
                 probe.name
             );
-            assert_eq!(probe.stride, 5);
+            assert_eq!(probe.stride, 8);
         }
     }
 

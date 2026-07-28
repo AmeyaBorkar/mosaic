@@ -107,8 +107,8 @@ fn extract_with(
     })
 }
 
-/// Extract the **core** vocabulary (luminance + gradient + normalized position, stride 5) —
-/// the density, edge, and spatial features. For the density/edge Facet (`facet_ramp`).
+/// Extract the **core** vocabulary (luminance + gradient + position + mean colour, stride 8) —
+/// the density, edge, spatial, and colour features. For the density/edge Facet (`facet_ramp`).
 #[wasm_bindgen]
 pub fn extract_features(
     rgba: &[u8],
@@ -258,13 +258,16 @@ type FeatureVocab = &'static [(&'static str, u16)];
 fn engine_schema(engine: &str) -> Result<(u16, FeatureVocab), String> {
     match engine {
         "ascii" => Ok((
-            5,
+            8,
             &[
                 ("luma", 0),
                 ("grad_mag", 1),
                 ("grad_dir", 2),
                 ("u", 3),
                 ("v", 4),
+                ("r", 5),
+                ("g", 6),
+                ("b", 7),
             ],
         )),
         "spectral" => Ok((1, &[("band_energy", 0)])),
@@ -475,22 +478,26 @@ mod dsl_tests {
 
     #[test]
     fn compiles_ascii_dsl_byte_identical_to_native() {
-        // Reads the spatial slots `u`/`v` too, so this pins that the browser and native
-        // compilers resolve the new position features to the same bytes.
-        let src = r#"grad_mag > threshold ? glyph(clamp(grad_dir * 1.27 + 2.0, 0, 3), "-/|\\") : ramp(clamp(luma - 0.5 * u + 0.3 * v, 0, 1), " .:-=+*#%@")"#;
+        // Reads the spatial `u`/`v` and colour `r`/`g`/`b` slots too, so this pins that the
+        // browser and native compilers resolve the new position and colour features to the
+        // same bytes.
+        let src = r#"grad_mag > threshold ? glyph(clamp(grad_dir * 1.27 + 2.0, 0, 3), "-/|\\") : ramp(clamp(luma - 0.5 * u + 0.3 * v + 0.2 * r - 0.1 * g - 0.2 * b, 0, 1), " .:-=+*#%@")"#;
         let params = vec![("threshold".to_string(), 0.6f32)];
         let (program, manifest) = compile_program("ascii", src, &params).unwrap();
         // A direct native compile against the same schema must produce the same bytes.
         let native = mosaic_dsl::compile(
             src,
             &Schema {
-                stride: 5,
+                stride: 8,
                 features: &[
                     ("luma", 0),
                     ("grad_mag", 1),
                     ("grad_dir", 2),
                     ("u", 3),
                     ("v", 4),
+                    ("r", 5),
+                    ("g", 6),
+                    ("b", 7),
                 ],
                 params: &[("threshold", 0.6)],
             },

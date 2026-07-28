@@ -45,7 +45,7 @@ pub const MAX_CELLS: usize = 8_000_000;
 
 /// Upper bound on the `f32` feature buffer produced for one render, in **bytes**.
 /// Unlike [`MAX_CELLS`] (a cell *count*), this is byte-aware, so it holds across both
-/// the stride-5 (L0+L1+position) and stride-64 (L2) vocabularies — an 8M-cell L2 grid would
+/// the stride-8 (L0+L1+position+colour) and stride-64 (L2) vocabularies — an 8M-cell L2 grid would
 /// otherwise allocate ~2 GB. Sized so the buffer plus a Facet's output fits inside
 /// `mosaic-runtime`'s 16 MiB per-execution memory cap.
 pub const MAX_FEATURE_BYTES: usize = 8 * 1024 * 1024;
@@ -300,8 +300,10 @@ pub mod color {
     }
 
     /// Deterministic integer mean colour of the pixels in `[x0, x1) × [y0, y1)`, packed RGBA.
-    /// An empty range yields transparent black (`0`).
-    fn mean_color(image: &ImageRef, x0: u32, x1: u32, y0: u32, y1: u32) -> u32 {
+    /// An empty range yields transparent black (`0`). `pub(crate)` so the feature extractor can
+    /// surface the same mean colour as the `r`/`g`/`b` vocabulary slots a Facet reads — one
+    /// source of truth for "the cell's colour", shared with the tint / half-block render.
+    pub(crate) fn mean_color(image: &ImageRef, x0: u32, x1: u32, y0: u32, y1: u32) -> u32 {
         let (mut r, mut g, mut b, mut a, mut n) = (0u64, 0u64, 0u64, 0u64, 0u64);
         for y in y0..y1 {
             for x in x0..x1 {
@@ -476,11 +478,12 @@ pub mod feature {
     use mosaic_core::feature::{FeatureField, FeatureSchema, FeatureType, Gather};
 
     /// The core per-cell stride — luminance (L0, slot 0), gradient magnitude/orientation
-    /// (L1, slots 1–2), and normalized cell-center position `u`/`v` (L0, slots 3–4) — as a
-    /// compile-time constant, equal to `vocabulary().total_slots()`; used on the hot path so
-    /// a schema `Vec` + `String` keys are not rebuilt every render just to sum a constant
-    /// (asserted equal in `vocabulary_matches_core_schema`).
-    pub(crate) const CORE_STRIDE: u32 = 5;
+    /// (L1, slots 1–2), normalized cell-centre position `u`/`v` (L0, slots 3–4), and mean
+    /// cell colour `r`/`g`/`b` (L0, slots 5–7) — as a compile-time constant, equal to
+    /// `vocabulary().total_slots()`; used on the hot path so a schema `Vec` + `String` keys
+    /// are not rebuilt every render just to sum a constant (asserted equal in
+    /// `vocabulary_matches_core_schema`).
+    pub(crate) const CORE_STRIDE: u32 = 8;
 
     /// Reject a feature buffer whose byte size overflows or exceeds
     /// [`crate::MAX_FEATURE_BYTES`], *before* it is allocated — so a pathological grid
@@ -506,6 +509,9 @@ pub mod feature {
     ///   orientation) (slots 1–2).
     /// - `position` — L0, self-only `Vector{2}` of the cell's normalized centre `(u, v)`,
     ///   each in `(0, 1)` (slots 3–4). Resolution-independent, exact, deterministic.
+    /// - `color` — L0, self-only `Vector{3}` of the cell's mean colour `(r, g, b)`, each
+    ///   normalized to `[0, 1]` (slots 5–7). The same deterministic integer mean the tint /
+    ///   half-block render uses, so a Facet reads exactly the colour it would be tinted with.
     ///
     /// L2 (`patch`, sub-cell structure) is appended here when it lands.
     pub fn vocabulary() -> FeatureSchema {
@@ -526,13 +532,18 @@ pub mod feature {
                     ty: FeatureType::Vector { len: 2 },
                     gather: Gather::SelfOnly,
                 },
+                FeatureField {
+                    key: "color".into(),
+                    ty: FeatureType::Vector { len: 3 },
+                    gather: Gather::SelfOnly,
+                },
             ],
         }
     }
 
     /// Per-cell features laid out per [`vocabulary`], row-major over cells, each
     /// cell occupying `stride` (= `schema.total_slots()`) contiguous `f32`s:
-    /// `[luminance, gradient_magnitude, gradient_orientation, u, v]`.
+    /// `[luminance, gradient_magnitude, gradient_orientation, u, v, r, g, b]`.
     #[derive(Debug, Clone)]
     pub struct FeatureBuffer {
         pub cols: u32,
@@ -610,6 +621,16 @@ pub mod feature {
                 // feature budget), so the result is bit-identical native vs wasm (preview == render).
                 data[base + 3] = (col as f32 + 0.5) / cols as f32;
                 data[base + 4] = (row as f32 + 0.5) / rows as f32;
+                // Mean cell colour, normalized per channel to [0, 1]. Reuses the same
+                // deterministic integer mean (`color::mean_color`) as the tint / half-block
+                // render, so a Facet reads exactly the colour it would be tinted with; the
+                // channel is an exact 0..255 integer and `/255.0` is correctly rounded, so it
+                // is bit-identical native vs wasm.
+                let (mx0, mx1, my0, my1) = grid.cell_bounds(col, row);
+                let mean = crate::color::mean_color(image, mx0, mx1, my0, my1);
+                data[base + 5] = (mean & 0xff) as f32 / 255.0;
+                data[base + 6] = ((mean >> 8) & 0xff) as f32 / 255.0;
+                data[base + 7] = ((mean >> 16) & 0xff) as f32 / 255.0;
             }
         }
 
@@ -1007,7 +1028,7 @@ mod tests {
         let schema = feature::vocabulary();
         // The hot-path constant must stay equal to the declared vocabulary's slot count.
         assert_eq!(schema.total_slots(), feature::CORE_STRIDE);
-        assert_eq!(feature::CORE_STRIDE, 5);
+        assert_eq!(feature::CORE_STRIDE, 8);
         // Position is self-only, so it does not widen the gather radius past the gradient's.
         assert_eq!(schema.max_radius(), 1);
     }
@@ -1170,7 +1191,7 @@ mod tests {
         let img = ImageRef::new(8, 8, &data).unwrap();
         let grid = Grid::new(8, 8, 4, 1.0);
         let buf = feature::extract(&img, &grid).unwrap();
-        assert_eq!(buf.stride, 5);
+        assert_eq!(buf.stride, 8);
         let (cols, rows) = (buf.cols, buf.rows);
         assert!(cols >= 2 && rows >= 2, "want a non-degenerate grid");
         for row in 0..rows {
@@ -1186,6 +1207,45 @@ mod tests {
         let tl = buf.cell(0, 0);
         assert_eq!(tl[3], 0.5 / cols as f32);
         assert_eq!(tl[4], 0.5 / rows as f32);
+    }
+
+    #[test]
+    fn color_slots_are_the_normalized_cell_mean() {
+        // A spatially-varying image (r ramps with x, g with y, b anti-ramps with x) so cells
+        // differ — this proves the extractor reads the correct per-cell region, which a solid
+        // image could not. Slots 5/6/7 must equal, bit-for-bit, the same integer mean the tint
+        // path (`extract_cell_colors`) produces for that cell, so a Facet reads exactly the
+        // colour it would be tinted with.
+        let (w, h) = (8u32, 8u32);
+        let mut data = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                data[i] = (x * 32) as u8; // r: 0..224 across x
+                data[i + 1] = (y * 32) as u8; // g: 0..224 across y
+                data[i + 2] = 255 - (x * 32) as u8; // b: 255..31 across x
+                data[i + 3] = 255;
+            }
+        }
+        let img = ImageRef::new(w, h, &data).unwrap();
+        let grid = Grid::new(w, h, 4, 1.0);
+        let buf = feature::extract(&img, &grid).unwrap();
+        assert_eq!(buf.stride, 8);
+        let tint = color::extract_cell_colors(&img, &grid).unwrap();
+        assert_eq!(tint.len(), buf.data.len() / 8);
+        let mut distinct = std::collections::BTreeSet::new();
+        for (i, cell) in buf.data.chunks_exact(8).enumerate() {
+            let packed = tint[i];
+            assert_eq!(cell[5], (packed & 0xff) as f32 / 255.0);
+            assert_eq!(cell[6], ((packed >> 8) & 0xff) as f32 / 255.0);
+            assert_eq!(cell[7], ((packed >> 16) & 0xff) as f32 / 255.0);
+            assert!((0.0..=1.0).contains(&cell[5]));
+            distinct.insert(packed);
+        }
+        assert!(
+            distinct.len() > 1,
+            "cells must differ so the per-cell region is actually exercised"
+        );
     }
 
     // --- Propagation: error-diffusion dithering ---
