@@ -52,6 +52,7 @@ build_and_copy structural \
 
 build_and_copy interp \
   crates/mosaic-runtime/tests/facet_interp.wasm \
+  crates/mosaic-certify/assets/facet_interp.wasm \
   packages/facet-abi/test/fixtures/facet_interp.wasm
 
 build_and_copy liar \

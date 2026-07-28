@@ -10,6 +10,9 @@ publish = false
 # The authoritative host: certify compiles and runs each Facet here to produce its golden
 # probe results. Also the source of the sandbox limits the profile mirrors by value.
 mosaic-runtime = { path = "../mosaic-runtime" }
+# The DSL bytecode VM: certifying a *program* validates it natively (for a precise rejection
+# code and its declared stride) before running it through the shipped interpreter Facet.
+mosaic-vm = { path = "../mosaic-vm" }
 # Typed structural inspection of untrusted module bytes (imports, memory/table limits,
 # exports, function bodies) for the static profile gate. Pinned to the version wasmtime 47
 # already uses (via mosaic-runtime), so no extra crate enters the graph.
@@ -23,3 +26,6 @@ sha2 = "0.10"
 [dev-dependencies]
 # Assemble binary wasm from WAT in the profile-fixture and certify tests.
 wat = "1"
+# Compile DSL source to bytecode in the program-certification tests (the same compiler the
+# browser and server use), so the tests certify a real authored program.
+mosaic-dsl = { path = "../mosaic-dsl" }

@@ -28,7 +28,8 @@ pub const CERTIFY_VERSION: u32 = 1;
 /// Base seed for the deterministic probe generator. No `rand`/clock is used, so the
 /// golden is stable across machines and runs (a hard requirement for the committed fixture
 /// and the browser cross-check). Same constant the DSL golden uses, for consistency.
-const PROBE_SEED: u64 = 0x0DDB_1A5E_5BAD_5EED;
+/// Shared with the DSL-program probe suite ([`crate::program`]).
+pub(crate) const PROBE_SEED: u64 = 0x0DDB_1A5E_5BAD_5EED;
 
 /// The observable result of running one probe through the authoritative host. Recorded so
 /// the browser must reproduce it: identical `tokens`, or *also* fail to produce tokens.
@@ -261,7 +262,8 @@ fn propagation_probes() -> Vec<ProbeSpec> {
 /// A deterministic feature buffer of `cols * rows * stride` values spanning `[-0.5, 1.5]`
 /// (so below-0, in-range, and above-1 are all exercised), with the ramp endpoints 0.0 and
 /// 1.0 pinned onto slot 0 of the first two cells so a density facet always sees them.
-fn probe_features(seed: u64, cols: u32, rows: u32, stride: u32) -> Vec<f32> {
+/// Shared with the DSL-program probe suite ([`crate::program`]).
+pub(crate) fn probe_features(seed: u64, cols: u32, rows: u32, stride: u32) -> Vec<f32> {
     let n = (cols as usize) * (rows as usize) * (stride as usize);
     let mut rng = XorShift64(seed | 1);
     let mut v = Vec::with_capacity(n);
@@ -280,11 +282,11 @@ fn probe_features(seed: u64, cols: u32, rows: u32, stride: u32) -> Vec<f32> {
 
 /// A tiny deterministic PRNG (xorshift64) for probe features. Not for cryptographic use —
 /// its only job is a stable, well-spread feature spread.
-struct XorShift64(u64);
+pub(crate) struct XorShift64(pub(crate) u64);
 
 impl XorShift64 {
     /// Next value in `[0, 1)`.
-    fn next_f32(&mut self) -> f32 {
+    pub(crate) fn next_f32(&mut self) -> f32 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -294,8 +296,8 @@ impl XorShift64 {
     }
 }
 
-/// Lowercase hex SHA-256 of `bytes`.
-fn sha256_hex(bytes: &[u8]) -> String {
+/// Lowercase hex SHA-256 of `bytes`. Shared with the DSL-program certificate.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(64);
     for byte in digest {

@@ -27,9 +27,11 @@
 
 mod certify;
 mod profile;
+mod program;
 
 pub use certify::{CERTIFY_VERSION, Certificate, CertifyOutcome, Probe, ProbeOutcome, certify};
 pub use profile::{
     AbiKind, MAX_FUNCTION_BODY_BYTES, MAX_FUNCTIONS, MAX_MEMORY_PAGES, MAX_MODULE_BYTES,
     MAX_TABLE_ELEMENTS, Profile, Rejection, RejectionCode, check_profile,
 };
+pub use program::{INTERP_WASM, ProgramCertificate, ProgramCertifyOutcome, certify_program};

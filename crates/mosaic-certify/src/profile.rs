@@ -97,8 +97,38 @@ pub enum RejectionCode {
     AmbiguousAbi,
     /// The module failed to compile in the authoritative host (execution layer).
     CompileFailed,
-    /// The module compiled but produced no tokens on any probe (execution layer).
+    /// The module compiled but produced no tokens on any probe (execution layer). Shared by
+    /// the wasm and DSL-program paths.
     NeverProducesTokens,
+
+    // --- DSL program (bytecode) rejections. A published program is a `mosaic-vm` bytecode
+    // blob run on the shared interpreter; these mirror `mosaic_vm::VmError` so "why was my
+    // program refused" is as machine-readable as the wasm profile above. ---
+    /// The program does not begin with the `mosaic-vm` magic — it is not a bytecode program.
+    BadMagic,
+    /// The program bytes end inside a header field, operand, table, or the code section.
+    Truncated,
+    /// The program contains an unknown opcode byte.
+    BadOpcode,
+    /// A `LOADF` reads a feature slot outside the declared stride.
+    BadFeatureSlot,
+    /// A `LOADP` reads a param index the program does not declare.
+    BadParamIndex,
+    /// A `TABLE` op names a table the program does not declare.
+    BadTableIndex,
+    /// A table entry is not a valid Unicode scalar value.
+    BadCodepoint,
+    /// The program's static stack effect underflows.
+    StackUnderflow,
+    /// The program's static stack effect exceeds the VM stack cap.
+    StackOverflow,
+    /// The program does not end with exactly one value on the stack.
+    BadFinalStack,
+    /// The program's declared feature stride does not match the engine it is published for
+    /// (e.g. a stride-3 image program submitted for the stride-1 spectral engine).
+    ProgramStrideMismatch,
+    /// The submitted engine name is not one this build renders.
+    UnknownEngine,
 }
 
 impl RejectionCode {
@@ -124,6 +154,18 @@ impl RejectionCode {
             RejectionCode::AmbiguousAbi => "ambiguous_abi",
             RejectionCode::CompileFailed => "compile_failed",
             RejectionCode::NeverProducesTokens => "never_produces_tokens",
+            RejectionCode::BadMagic => "bad_magic",
+            RejectionCode::Truncated => "truncated",
+            RejectionCode::BadOpcode => "bad_opcode",
+            RejectionCode::BadFeatureSlot => "bad_feature_slot",
+            RejectionCode::BadParamIndex => "bad_param_index",
+            RejectionCode::BadTableIndex => "bad_table_index",
+            RejectionCode::BadCodepoint => "bad_codepoint",
+            RejectionCode::StackUnderflow => "stack_underflow",
+            RejectionCode::StackOverflow => "stack_overflow",
+            RejectionCode::BadFinalStack => "bad_final_stack",
+            RejectionCode::ProgramStrideMismatch => "program_stride_mismatch",
+            RejectionCode::UnknownEngine => "unknown_engine",
         }
     }
 }

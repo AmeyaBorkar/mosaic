@@ -891,7 +891,9 @@ dependencies = [
 name = "mosaic-certify"
 version = "0.0.0"
 dependencies = [
+ "mosaic-dsl",
  "mosaic-runtime",
+ "mosaic-vm",
  "serde",
  "serde_json",
  "sha2",
