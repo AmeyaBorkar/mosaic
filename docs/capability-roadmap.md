@@ -9,8 +9,9 @@ sits on).*
 
 ## The framing
 
-A Facet is a per-cell function: measurements in → one glyph out. You can grow what it can make
-along exactly **five independent axes**:
+A Facet is a per-cell function: measurements in → one glyph out, authored in **Glint** (our
+little expression language, crate `mosaic-dsl`). You can grow what it can make along exactly
+**five independent axes**:
 
 | Axis | Meaning |
 |------|---------|

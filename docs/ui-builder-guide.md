@@ -77,8 +77,8 @@ authoring experience is about the second one.**
   advanced author in Rust/C/etc. Powerful, but not something you author in a text box. The UI
   mostly *runs* and *browses* these; it doesn't need an editor for them.
 - **`kind: "program"` — DSL program (the friendly path).** A one-line expression in a tiny
-  language, compiled to bytecode that runs on one shared interpreter. This is what your
-  **in-browser editor** produces. Example:
+  language — **Glint** — compiled to bytecode that runs on one shared interpreter. This is what
+  your **in-browser editor** produces. Example:
 
   ```
   grad_mag > 0.6 ? glyph(floor(grad_dir), "-/|\\") : ramp(luma, " .:-=+*#%@")
@@ -340,10 +340,11 @@ each glyph with `extractColors(...)` for a tint. Paint to a canvas, cell by cell
 
 ---
 
-## 11 · The DSL cheatsheet
+## 11 · The Glint cheatsheet
 
-A single expression, evaluated once per cell. Every value is a number; the final value is taken
-as a glyph codepoint. Useful for syntax highlighting and autocomplete.
+*Glint* is the language a DSL Facet is written in. A single expression, evaluated once per cell.
+Every value is a number; the final value is taken as a glyph codepoint. Useful for syntax
+highlighting and autocomplete.
 
 **Names & literals**
 
