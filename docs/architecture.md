@@ -340,7 +340,7 @@ gather vs propagation. Input is authoritative raw bytes (RGBA8 / f32 PCM) — no
 ambiguity. CPU-bound work runs on blocking workers off the async executor.
 
 ### D16 — Facet registry with bearer auth and moderation *(settled)*
-`mosaic-registry` is the store — a `Store` trait (insert / get / get_wasm / list / set_state)
+`mosaic-registry` is the store — a `Store` trait (insert / get / get_bytes / list / set_state)
 with a durable `RedbStore` (pure-Rust, embedded, ACID; no C toolchain, no server process) and
 an `InMemoryStore` the endpoints and auth are tested against. The lifecycle is a small,
 explicit state machine: an author **publishes** (`POST /v1/facets`), which runs the gate and
@@ -359,15 +359,41 @@ digest (the standard opaque-API-token pattern). The service is container-ready (
 push / deploy) needs registry credentials and is left an explicit, unwired hook rather than
 faked.
 
+### D17 — Publish and run authored DSL Facets (registry program-kind) *(settled)*
+A DSL Facet is authored and previewed entirely in the browser (D14, D9), but was a local
+dead-end: the registry stored only self-contained wasm modules. D17 closes the author → share
+seam. A stored Facet is now a tagged **`FacetArtifact`**: a `Wasm` module (as before) or a
+`Program` — `mosaic-vm` bytecode that runs on the **one shared interpreter Facet** (`facet-interp`),
+authored for a named `engine` (which fixes its stride). Only the bytecode is untrusted; the
+interpreter is a trusted, first-party module (shipped as a committed asset and re-validating
+every program it runs).
+
+Certification mirrors the wasm path (D15) for bytecode: `certify_program` validates natively
+(`mosaic_vm::validate`, for a precise rejection code and the declared stride), then probes the
+program through the interpreter in the authoritative sandbox (`run_program`) and emits a
+`ProgramCertificate` — the golden `features → tokens` bound to the exact bytecode by SHA-256.
+Native `mosaic_vm` and the sandboxed interpreter are byte-identical by construction, so this is
+the same `preview == render` guarantee (D9), now for authored DSL. The browser closes the loop:
+`verifyProgramCertificate` replays the probes through its own interpreter and must reproduce
+every outcome — a *checked* property, not a hope, for any published program.
+
+`POST /v1/facets` accepts a wasm module (`wasm`) or a program (`program` + `engine`); a program
+is refused for an unknown engine or a stride that disagrees with the engine it targets. Render
+resolves a Facet by registry **id** (only `Published` renders by id) as well as inline, running
+a program on the shared interpreter at its declared stride — the stride check fully guards
+vocabulary compatibility, so the render path needs no engine table. Bytes are served
+kind-specifically: `/wasm` for a module, `/program` for bytecode.
+
 ## Open decisions (from the vision — deliberately not yet frozen)
 
 - *All of the vision's open questions — O1, O2, O4, O4.1, O5, and now O3 — are settled;
   see D5, D6 and D11–D14.*
 - The platform build-out is now largely engineering-complete: the **conformance gate**
   (server-authoritative certify, D15), the **authoritative server render endpoint** (D15),
-  and the **registry (+ auth/moderation)** (D16) are built. What remains is the **web shell**
-  (`apps/web`, the Next.js editor/preview over these endpoints) and, on the engine track, new
-  Tesserae (ANSI/colour, halftone, data→art). These are engineering, not open decisions.
+  the **registry (+ auth/moderation)** (D16), and **publishing + running authored DSL Facets**
+  (D17) are built. What remains is the **web shell** (`apps/web`, the Next.js editor/preview
+  over these endpoints) and, on the engine track, new Tesserae (ANSI/colour, halftone,
+  data→art). These are engineering, not open decisions.
 
 ## Repository layout
 

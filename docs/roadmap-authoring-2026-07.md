@@ -97,4 +97,28 @@ C1 certify program · C2 registry+server program-kind. Docs sweep at the end.
 - **B3 done** — server colour modes: `engine: "halfblock"` (coloured pixel art, no Facet,
   returns `glyph/fg/bg`) and `engine: "ascii"` + `params.color: true` (adds per-cell `colors`
   alongside `text`). 24 server HTTP tests; server README updated. **Phase B (colour) complete.**
-- (next) C1 — certify a DSL *program*; C2 — registry program-kind + server wiring.
+- **C1 done** — `mosaic_certify::certify_program(sandbox, interp, program)`: validate the
+  bytecode natively (`mosaic_vm::validate`, for a precise rejection code + declared stride),
+  then probe it through the **shipped interpreter** in the authoritative sandbox
+  (`run_program`) and emit a `ProgramCertificate` (golden `features -> tokens`, bound to the
+  bytecode by SHA-256). `RejectionCode` gains the DSL variants (mirroring `VmError`) over one
+  uniform `{code, message}` envelope. The interpreter is a committed asset
+  (`crates/mosaic-certify/assets/facet_interp.wasm`) added to `build-facets.sh`, so the H1
+  git-diff gate keeps it in lockstep with `facets/interp/src`. 32 certify tests.
+- **C2 done** — registry + server program-kind. A stored Facet is a tagged `FacetArtifact`:
+  `Wasm { abiKind, wasmSha256, certificate }` or `Program { engine, stride, programSha256,
+  certificate }`; both stores handle both, bytes via `get_bytes`. The server compiles the
+  interpreter once (`AppState.interp`); `POST /v1/facets` accepts a wasm module (`wasm`) or a
+  DSL program (`program` + `engine`), certifying each and refusing a program for an unknown
+  engine or a stride that disagrees with it. Render resolves a Facet by registry **id** (only
+  `Published` renders by id) as well as inline, running a program on the shared interpreter;
+  bytes are served kind-specifically (`/wasm`, `/program`). 32 server HTTP tests; README +
+  architecture updated.
+- **C3 done** — `@mosaic/facet-abi verifyProgramCertificate(interp, programBytes, cert)`:
+  replays a program certificate's probes through the interpreter on the browser's own wasm
+  engine and asserts every outcome matches, after binding the golden to the bytecode by
+  SHA-256 — `preview == render`, now a *checked* property for authored DSL Facets. The wasm
+  and program verifiers share one `assertProbeMatches`. A new `emit_program_cert_golden`
+  example writes `program_cert_golden.json` (bytecode inline → self-contained test, also pins
+  native↔browser compiler agreement); wired into `verify-fixtures.sh` and web CI. 5 browser
+  tests. **Phase C (publish + run authored DSL Facets) complete.**

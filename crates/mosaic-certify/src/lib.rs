@@ -18,6 +18,10 @@
 //!   a [`Certificate`]: the golden `(features -> tokens)` vectors the browser must
 //!   reproduce, making `preview == render` (decision D9) a checked property for *any*
 //!   certified Facet, not just the shipped ones.
+//! - [`certify_program`] — the same admission and probing for a **DSL program** (`mosaic-vm`
+//!   bytecode) rather than a self-contained module: it validates the bytecode natively, then
+//!   probes it through the shipped interpreter Facet ([`INTERP_WASM`]) and emits a
+//!   [`ProgramCertificate`]. This is how an authored DSL Facet is admitted to the registry.
 //!
 //! The profile constants here are the single numeric contract shared with
 //! `mosaic-runtime`'s sandbox limits and the browser mirror; they are recorded in the
