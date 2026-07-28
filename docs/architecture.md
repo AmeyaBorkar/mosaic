@@ -293,10 +293,11 @@ guarantee — no untrusted code in the compositor, and the final text passes the
 untrusted-glyph boundary. Proven end-to-end: a JSON composition drives the real image and
 audio engines to one artifact, byte-stable across a serialize → parse → render round-trip.
 
-### D14 — Facet DSL: bytecode + one interpreter Facet *(settled — O3)*
-Authoring a Facet no longer requires `no_std` Rust. `mosaic-dsl` compiles a small expression
-language — a per-cell expression over named features and params producing one glyph — to a
-compact bytecode; a single interpreter Facet (`facets/interp`, wrapping the shared
+### D14 — Glint, the Facet authoring language: bytecode + one interpreter Facet *(settled — O3)*
+Authoring a Facet no longer requires `no_std` Rust. **Glint** (the crate is `mosaic-dsl`)
+compiles a small expression language — a per-cell expression over named features and params
+producing one glyph — to a compact bytecode; a single interpreter Facet (`facets/interp`,
+wrapping the shared
 `mosaic-vm`) runs *any* bytecode in the existing sandbox. This was chosen over a wasm-codegen
 backend (a large build emitting opaque output) and over host-side AST interpretation (which
 would widen the attack surface): the bytecode interpreter reuses the already-audited sandbox

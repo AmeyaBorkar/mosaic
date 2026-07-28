@@ -1,6 +1,7 @@
 //! # mosaic-dsl
 //!
-//! The **Facet DSL** (O3): a small expression language compiled to [`mosaic_vm`] bytecode.
+//! **Glint** (O3) — the Facet authoring language: a small expression language compiled to
+//! [`mosaic_vm`] bytecode. (`mosaic-dsl` is the crate; *Glint* is the language it compiles.)
 //!
 //! A Facet's per-cell logic is a single expression that reads the cell's named features
 //! and the Facet's params and produces one output glyph. The expression compiles to the

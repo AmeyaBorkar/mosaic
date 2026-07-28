@@ -1,6 +1,7 @@
 //! # mosaic-vm
 //!
-//! The **Facet DSL bytecode VM** (O3): a small, safe, deterministic per-cell interpreter.
+//! The **Glint bytecode VM** (O3): a small, safe, deterministic per-cell interpreter. Runs
+//! the bytecode the Facet authoring language (Glint, `mosaic-dsl`) compiles to.
 //!
 //! A Facet authored in the DSL compiles to a compact bytecode *program*. This crate
 //! validates that program and evaluates it once per cell — reading the cell's features and
