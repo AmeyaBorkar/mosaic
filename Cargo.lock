@@ -958,6 +958,7 @@ dependencies = [
  "base64",
  "mosaic-certify",
  "mosaic-core",
+ "mosaic-dsl",
  "mosaic-registry",
  "mosaic-runtime",
  "serde",

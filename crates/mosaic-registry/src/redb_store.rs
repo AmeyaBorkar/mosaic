@@ -11,8 +11,8 @@ use crate::{FacetRecord, FacetState, FacetSummary, ListFilter, NewFacet, Store, 
 
 /// id → JSON-encoded [`FacetRecord`] (metadata + certificate).
 const RECORDS: TableDefinition<&str, &[u8]> = TableDefinition::new("facet_records");
-/// id → module bytes.
-const WASM: TableDefinition<&str, &[u8]> = TableDefinition::new("facet_wasm");
+/// id → the stored bytes (wasm module or DSL bytecode).
+const BYTES: TableDefinition<&str, &[u8]> = TableDefinition::new("facet_bytes");
 
 /// A durable registry store. Cloneable handles are unnecessary — wrap in an `Arc` to share.
 pub struct RedbStore {
@@ -32,7 +32,7 @@ impl RedbStore {
         let txn = db.begin_write().map_err(backend)?;
         {
             txn.open_table(RECORDS).map_err(backend)?;
-            txn.open_table(WASM).map_err(backend)?;
+            txn.open_table(BYTES).map_err(backend)?;
         }
         txn.commit().map_err(backend)?;
         Ok(RedbStore { db })
@@ -45,11 +45,9 @@ impl Store for RedbStore {
             id: facet.id,
             name: facet.name,
             author: facet.author,
-            abi_kind: facet.abi_kind,
-            wasm_sha256: facet.wasm_sha256,
             state: facet.state,
             created_at: facet.created_at,
-            certificate: facet.certificate,
+            artifact: facet.artifact,
         };
         let json = serde_json::to_vec(&record).map_err(backend)?;
 
@@ -59,8 +57,9 @@ impl Store for RedbStore {
             records
                 .insert(record.id.as_str(), json.as_slice())
                 .map_err(backend)?;
-            let mut wasm = txn.open_table(WASM).map_err(backend)?;
-            wasm.insert(record.id.as_str(), facet.wasm.as_slice())
+            let mut bytes = txn.open_table(BYTES).map_err(backend)?;
+            bytes
+                .insert(record.id.as_str(), facet.bytes.as_slice())
                 .map_err(backend)?;
         }
         txn.commit().map_err(backend)?;
@@ -78,10 +77,10 @@ impl Store for RedbStore {
         }
     }
 
-    fn get_wasm(&self, id: &str) -> Result<Option<Vec<u8>>, StoreError> {
+    fn get_bytes(&self, id: &str) -> Result<Option<Vec<u8>>, StoreError> {
         let txn = self.db.begin_read().map_err(backend)?;
-        let wasm = txn.open_table(WASM).map_err(backend)?;
-        match wasm.get(id).map_err(backend)? {
+        let bytes = txn.open_table(BYTES).map_err(backend)?;
+        match bytes.get(id).map_err(backend)? {
             Some(guard) => Ok(Some(guard.value().to_vec())),
             None => Ok(None),
         }
@@ -132,10 +131,11 @@ impl Store for RedbStore {
 
 #[cfg(test)]
 mod tests {
-    use mosaic_certify::{AbiKind, Certificate, Profile};
+    use mosaic_certify::{AbiKind, Certificate, Profile, ProgramCertificate};
     use tempfile::TempDir;
 
     use super::*;
+    use crate::{ArtifactKind, FacetArtifact};
 
     fn cert() -> Certificate {
         Certificate {
@@ -152,12 +152,14 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             author: "author-1".to_string(),
-            abi_kind: AbiKind::Gather,
-            wasm_sha256: "cd".repeat(32),
             state,
             created_at,
-            certificate: cert(),
-            wasm: vec![9, 8, 7, 6],
+            artifact: FacetArtifact::Wasm {
+                abi_kind: AbiKind::Gather,
+                wasm_sha256: "cd".repeat(32),
+                certificate: cert(),
+            },
+            bytes: vec![9, 8, 7, 6],
         }
     }
 
@@ -175,7 +177,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(s.get("a").unwrap().unwrap().name, "A");
-        assert_eq!(s.get_wasm("b").unwrap().unwrap(), vec![9, 8, 7, 6]);
+        assert_eq!(s.get_bytes("b").unwrap().unwrap(), vec![9, 8, 7, 6]);
         assert!(s.get("missing").unwrap().is_none());
 
         let published = s
@@ -204,5 +206,42 @@ mod tests {
         let got = reopened.get("persist").unwrap().unwrap();
         assert_eq!(got.name, "P");
         assert_eq!(got.created_at, 42);
+    }
+
+    #[test]
+    fn program_facet_persists_with_its_certificate() {
+        let dir = TempDir::new().unwrap();
+        let s = store(&dir);
+        s.insert(NewFacet {
+            id: "prog".to_string(),
+            name: "DSL Ramp".to_string(),
+            author: "author-1".to_string(),
+            state: FacetState::Published,
+            created_at: 7,
+            artifact: FacetArtifact::Program {
+                engine: "ascii".to_string(),
+                stride: 3,
+                program_sha256: "ef".repeat(32),
+                certificate: ProgramCertificate {
+                    certify_version: 1,
+                    program_sha256: "ef".repeat(32),
+                    stride: 3,
+                    probes: vec![],
+                },
+            },
+            bytes: vec![1, 2, 3],
+        })
+        .unwrap();
+
+        let got = s.get("prog").unwrap().unwrap();
+        assert_eq!(got.summary().kind, ArtifactKind::Program);
+        match got.artifact {
+            FacetArtifact::Program { engine, stride, .. } => {
+                assert_eq!(engine, "ascii");
+                assert_eq!(stride, 3);
+            }
+            FacetArtifact::Wasm { .. } => panic!("expected a program artifact"),
+        }
+        assert_eq!(s.get_bytes("prog").unwrap().unwrap(), vec![1, 2, 3]);
     }
 }

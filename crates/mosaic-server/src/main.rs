@@ -5,11 +5,14 @@ use std::sync::Arc;
 
 use mosaic_registry::{InMemoryStore, RedbStore, Store};
 use mosaic_runtime::Sandbox;
-use mosaic_server::{AppState, AuthConfig, app};
+use mosaic_server::{AppState, AuthConfig, app, compile_interp};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let sandbox = Arc::new(Sandbox::new()?);
+    let sandbox = Sandbox::new()?;
+    // The one trusted DSL interpreter, compiled once and shared (DSL-program Facets run on it).
+    let interp = Arc::new(compile_interp(&sandbox)?);
+    let sandbox = Arc::new(sandbox);
     // Tokens are configured out of band via MOSAIC_TOKENS (a JSON file kept out of the
     // repo). Absent it, no bearer token authenticates — read-only public endpoints still work.
     let auth = Arc::new(AuthConfig::from_env()?);
@@ -32,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
 
     let router = app(AppState {
         sandbox,
+        interp,
         auth,
         registry,
     });

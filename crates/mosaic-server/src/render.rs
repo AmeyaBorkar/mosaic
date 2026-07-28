@@ -4,15 +4,18 @@
 //!
 //! 1. decode the input and extract features with the *same* engine functions the browser
 //!    compiles to wasm (`tessera_*::feature::extract*`);
-//! 2. run the Facet through the proven sandbox (`run_map` / `run_map_2d`);
+//! 2. run the Facet through the proven sandbox (`run_map` / `run_map_2d` for a wasm Facet,
+//!    `run_program` on the shared interpreter for a DSL program);
 //! 3. compose the tokens with the *same* shared composer (`mosaic_core::compose`).
 //!
 //! Because every step is the same source as the preview, a server render is bit-identical
 //! to what the browser shows — this endpoint is the "truth" render for sharing and export.
 //!
 //! The **engine** selects the feature vocabulary (and thus the stride): `ascii` (stride 3),
-//! `ascii-structural` (stride 64), `spectral` (stride 1). The Facet's certified **ABI kind**
-//! selects gather vs propagation. A non-conformant inline Facet is refused before it runs.
+//! `ascii-structural` (stride 64), `spectral` (stride 1). A wasm Facet's certified **ABI kind**
+//! selects gather vs propagation; a DSL program is always gather. The Facet comes either
+//! inline (a base64 wasm module, admitted before it runs) or by `id` from the registry (a
+//! published wasm module or DSL program).
 
 use axum::Json;
 use axum::extract::State;
@@ -21,6 +24,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use mosaic_certify::{AbiKind, Rejection, RejectionCode, check_profile};
 use mosaic_core::compose::compose_codepoints;
+use mosaic_registry::{FacetArtifact, FacetState};
 use mosaic_runtime::{Facet, Limits, Sandbox};
 use serde::{Deserialize, Serialize};
 use tessera_ascii::{Grid, ImageRef};
@@ -28,6 +32,18 @@ use tessera_spectral::{SignalRef, SpectroGrid};
 
 use crate::AppState;
 use crate::error::ApiError;
+
+/// The feature stride of a render `engine`, or `None` if the name is not one this build
+/// renders. Used at publish time to check a DSL program targets an engine whose stride it
+/// declares; the render path itself compares against the extractor's actual stride.
+pub(crate) fn engine_stride(engine: &str) -> Option<u32> {
+    match engine {
+        "ascii" => Some(3),
+        "ascii-structural" => Some(64),
+        "spectral" => Some(1),
+        _ => None,
+    }
+}
 
 /// Request body for `POST /v1/render`, discriminated by `engine`.
 #[derive(Deserialize)]
@@ -62,24 +78,15 @@ pub enum RenderRequest {
     },
 }
 
-/// Where the Facet module comes from. v1 supports an inline base64 module; the registry
-/// `id` source is added with the registry.
+/// Where the Facet comes from: an inline base64 wasm module, or a published registry `id`
+/// (a wasm module or a DSL program). Exactly one must be given.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FacetSource {
     #[serde(default)]
     inline: Option<String>,
-}
-
-impl FacetSource {
-    fn wasm(&self) -> Result<Vec<u8>, ApiError> {
-        match &self.inline {
-            Some(b64) => decode_b64(b64, "facet.inline"),
-            None => Err(ApiError::bad_request(
-                "facet.inline (base64 wasm) is required",
-            )),
-        }
-    }
+    #[serde(default)]
+    id: Option<String>,
 }
 
 /// Raw RGBA8 image input — the authoritative form (no decode ambiguity): the exact bytes
@@ -158,20 +165,29 @@ pub async fn render_handler(
     State(state): State<AppState>,
     Json(req): Json<RenderRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Decode the (potentially large) base64 payloads off the wasm path, then run the whole
-    // CPU-bound pipeline (extract → run → compose) on a blocking worker.
-    let job = build_job(req)?;
+    // Resolve the Facet (which may hit the registry) and decode the (potentially large) base64
+    // payloads off the wasm path, then run the whole CPU-bound pipeline (extract → run →
+    // compose) on a blocking worker.
+    let job = build_job(&state, req).await?;
     let sandbox = state.sandbox.clone();
-    let result = tokio::task::spawn_blocking(move || run_job(&sandbox, job))
+    let interp = state.interp.clone();
+    let result = tokio::task::spawn_blocking(move || run_job(&sandbox, &interp, job))
         .await
         .map_err(|e| ApiError::internal(format!("render worker failed: {e}")))?;
     result.map(Json)
 }
 
+/// A resolved Facet ready to run: either a wasm module (admitted and compiled at run time) or
+/// a DSL program (run on the shared interpreter, at its declared `stride`).
+enum FacetJob {
+    Wasm(Vec<u8>),
+    Program { bytes: Vec<u8>, stride: u32 },
+}
+
 /// Owned, decoded render work — everything the blocking pipeline needs, no borrows.
 enum RenderJob {
     Ascii {
-        wasm: Vec<u8>,
+        facet: FacetJob,
         rgba: Vec<u8>,
         width: u32,
         height: u32,
@@ -190,7 +206,7 @@ enum RenderJob {
         cell_aspect: f32,
     },
     Spectral {
-        wasm: Vec<u8>,
+        facet: FacetJob,
         pcm: Vec<f32>,
         sample_rate: u32,
         bands: u32,
@@ -201,32 +217,41 @@ enum RenderJob {
     },
 }
 
-fn build_job(req: RenderRequest) -> Result<RenderJob, ApiError> {
+async fn build_job(state: &AppState, req: RenderRequest) -> Result<RenderJob, ApiError> {
     match req {
         RenderRequest::Ascii {
             facet,
             input,
             params,
-        } => Ok(ascii_job(facet, input, params, false)?),
+        } => {
+            let facet = resolve_facet(state, facet).await?;
+            ascii_job(facet, input, params, false)
+        }
         RenderRequest::AsciiStructural {
             facet,
             input,
             params,
-        } => Ok(ascii_job(facet, input, params, true)?),
+        } => {
+            let facet = resolve_facet(state, facet).await?;
+            ascii_job(facet, input, params, true)
+        }
         RenderRequest::Spectral {
             facet,
             input,
             params,
-        } => Ok(RenderJob::Spectral {
-            wasm: facet.wasm()?,
-            pcm: decode_pcm(&input.pcm)?,
-            sample_rate: input.sample_rate,
-            bands: params.bands,
-            win: params.win,
-            hop: params.hop,
-            fmin: params.fmin,
-            fmax: params.fmax,
-        }),
+        } => {
+            let facet = resolve_facet(state, facet).await?;
+            Ok(RenderJob::Spectral {
+                facet,
+                pcm: decode_pcm(&input.pcm)?,
+                sample_rate: input.sample_rate,
+                bands: params.bands,
+                win: params.win,
+                hop: params.hop,
+                fmin: params.fmin,
+                fmax: params.fmax,
+            })
+        }
         RenderRequest::Halfblock { input, params } => Ok(RenderJob::Halfblock {
             rgba: decode_b64(&input.rgba, "input.rgba")?,
             width: input.width,
@@ -237,14 +262,57 @@ fn build_job(req: RenderRequest) -> Result<RenderJob, ApiError> {
     }
 }
 
+/// Resolve a [`FacetSource`] to a runnable [`FacetJob`]. An inline module is decoded here; an
+/// `id` is looked up in the registry (a blocking read). Render is public, so only a
+/// **published** Facet renders by id — an unpublished or unknown id is a 404 (its existence is
+/// not revealed).
+async fn resolve_facet(state: &AppState, source: FacetSource) -> Result<FacetJob, ApiError> {
+    match (source.inline, source.id) {
+        (Some(_), Some(_)) => Err(ApiError::bad_request(
+            "provide `facet.inline` or `facet.id`, not both",
+        )),
+        (Some(b64), None) => Ok(FacetJob::Wasm(decode_b64(&b64, "facet.inline")?)),
+        (None, Some(id)) => resolve_registry_facet(state, id).await,
+        (None, None) => Err(ApiError::bad_request(
+            "facet.inline (base64 wasm) or facet.id (a published facet) is required",
+        )),
+    }
+}
+
+async fn resolve_registry_facet(state: &AppState, id: String) -> Result<FacetJob, ApiError> {
+    let registry = state.registry.clone();
+    let lookup_id = id.clone();
+    let record = tokio::task::spawn_blocking(move || registry.get(&lookup_id))
+        .await
+        .map_err(|e| ApiError::internal(format!("registry worker failed: {e}")))?
+        .map_err(|e| ApiError::internal(format!("registry backend error: {e}")))?
+        .ok_or_else(|| ApiError::not_found("no such facet"))?;
+    if record.state != FacetState::Published {
+        // Not public: do not reveal that a non-published Facet exists.
+        return Err(ApiError::not_found("no such facet"));
+    }
+
+    let registry = state.registry.clone();
+    let bytes = tokio::task::spawn_blocking(move || registry.get_bytes(&id))
+        .await
+        .map_err(|e| ApiError::internal(format!("registry worker failed: {e}")))?
+        .map_err(|e| ApiError::internal(format!("registry backend error: {e}")))?
+        .ok_or_else(|| ApiError::not_found("no such facet"))?;
+
+    Ok(match record.artifact {
+        FacetArtifact::Wasm { .. } => FacetJob::Wasm(bytes),
+        FacetArtifact::Program { stride, .. } => FacetJob::Program { bytes, stride },
+    })
+}
+
 fn ascii_job(
-    facet: FacetSource,
+    facet: FacetJob,
     input: ImageInput,
     params: AsciiParams,
     structural: bool,
 ) -> Result<RenderJob, ApiError> {
     Ok(RenderJob::Ascii {
-        wasm: facet.wasm()?,
+        facet,
         rgba: decode_b64(&input.rgba, "input.rgba")?,
         width: input.width,
         height: input.height,
@@ -255,10 +323,10 @@ fn ascii_job(
     })
 }
 
-fn run_job(sandbox: &Sandbox, job: RenderJob) -> Result<RenderOk, ApiError> {
+fn run_job(sandbox: &Sandbox, interp: &Facet, job: RenderJob) -> Result<RenderOk, ApiError> {
     match job {
         RenderJob::Ascii {
-            wasm,
+            facet,
             rgba,
             width,
             height,
@@ -267,7 +335,6 @@ fn run_job(sandbox: &Sandbox, job: RenderJob) -> Result<RenderOk, ApiError> {
             structural,
             color,
         } => {
-            let (abi, facet) = admit(sandbox, &wasm)?;
             if cols == 0 {
                 return Err(ApiError::bad_request(
                     "params.cols must be greater than zero",
@@ -300,7 +367,7 @@ fn run_job(sandbox: &Sandbox, job: RenderJob) -> Result<RenderOk, ApiError> {
                 None
             };
             run_and_compose(
-                sandbox, &facet, abi, buf.cols, buf.rows, buf.stride, buf.data, colors,
+                sandbox, interp, &facet, buf.cols, buf.rows, buf.stride, buf.data, colors,
             )
         }
         RenderJob::Halfblock {
@@ -331,7 +398,7 @@ fn run_job(sandbox: &Sandbox, job: RenderJob) -> Result<RenderOk, ApiError> {
             })
         }
         RenderJob::Spectral {
-            wasm,
+            facet,
             pcm,
             sample_rate,
             bands,
@@ -340,22 +407,21 @@ fn run_job(sandbox: &Sandbox, job: RenderJob) -> Result<RenderOk, ApiError> {
             fmin,
             fmax,
         } => {
-            let (abi, facet) = admit(sandbox, &wasm)?;
             let signal = SignalRef::new(&pcm, sample_rate)
                 .map_err(|e| ApiError::bad_request(e.to_string()))?;
             let grid = SpectroGrid::new(bands, win, hop, fmin, fmax);
             let buf = tessera_spectral::feature::extract(&signal, &grid)
                 .map_err(|e| ApiError::bad_request(e.to_string()))?;
             run_and_compose(
-                sandbox, &facet, abi, buf.cols, buf.rows, buf.stride, buf.data, None,
+                sandbox, interp, &facet, buf.cols, buf.rows, buf.stride, buf.data, None,
             )
         }
     }
 }
 
-/// Statically admit the inline Facet and compile it in the authoritative host. A
-/// non-conformant module is a 422 `Rejected`; a module that passes the static gate but
-/// fails full wasm validation is a 422 `compile_failed`.
+/// Statically admit an inline wasm Facet and compile it in the authoritative host. A
+/// non-conformant module is a 422 `Rejected`; a module that passes the static gate but fails
+/// full wasm validation is a 422 `compile_failed`.
 fn admit(sandbox: &Sandbox, wasm: &[u8]) -> Result<(AbiKind, Facet), ApiError> {
     let abi = check_profile(wasm).map_err(ApiError::Rejected)?;
     let facet = sandbox.compile(wasm).map_err(|e| {
@@ -367,11 +433,14 @@ fn admit(sandbox: &Sandbox, wasm: &[u8]) -> Result<(AbiKind, Facet), ApiError> {
     Ok((abi, facet))
 }
 
+/// Run the resolved Facet over the extracted feature buffer and compose the tokens. A wasm
+/// Facet is admitted and run through its certified ABI; a DSL program runs on the shared
+/// interpreter at its declared stride (a stride that disagrees with the engine's is a 422).
 #[allow(clippy::too_many_arguments)]
 fn run_and_compose(
     sandbox: &Sandbox,
-    facet: &Facet,
-    abi: AbiKind,
+    interp: &Facet,
+    facet: &FacetJob,
     cols: u32,
     rows: u32,
     stride: u32,
@@ -379,20 +448,50 @@ fn run_and_compose(
     colors: Option<Vec<u32>>,
 ) -> Result<RenderOk, ApiError> {
     let ncells = (cols as usize) * (rows as usize);
-    let tokens = match abi {
-        AbiKind::Gather => {
-            sandbox.run_map(facet, Limits::default(), &data, ncells, stride as usize)
+    let tokens = match facet {
+        FacetJob::Wasm(wasm) => {
+            let (abi, compiled) = admit(sandbox, wasm)?;
+            match abi {
+                AbiKind::Gather => {
+                    sandbox.run_map(&compiled, Limits::default(), &data, ncells, stride as usize)
+                }
+                AbiKind::Propagation => sandbox.run_map_2d(
+                    &compiled,
+                    Limits::default(),
+                    &data,
+                    cols as usize,
+                    rows as usize,
+                    stride as usize,
+                ),
+            }
+            .map_err(|e| ApiError::render_failed(format!("Facet failed during render: {e:#}")))?
         }
-        AbiKind::Propagation => sandbox.run_map_2d(
-            facet,
-            Limits::default(),
-            &data,
-            cols as usize,
-            rows as usize,
-            stride as usize,
-        ),
-    }
-    .map_err(|e| ApiError::render_failed(format!("Facet failed during render: {e:#}")))?;
+        FacetJob::Program {
+            bytes,
+            stride: program_stride,
+        } => {
+            if *program_stride != stride {
+                return Err(ApiError::Rejected(Rejection {
+                    code: RejectionCode::ProgramStrideMismatch,
+                    message: format!(
+                        "program declares stride {program_stride} but this render has stride {stride}"
+                    ),
+                }));
+            }
+            sandbox
+                .run_program(
+                    interp,
+                    Limits::default(),
+                    bytes,
+                    &data,
+                    ncells,
+                    stride as usize,
+                )
+                .map_err(|e| {
+                    ApiError::render_failed(format!("program failed during render: {e:#}"))
+                })?
+        }
+    };
     let text = compose_codepoints(cols, rows, &tokens);
     Ok(RenderOk {
         cols,

@@ -92,6 +92,13 @@ Response: `200 { "cols", "rows", "text" }`. Refusals: `422` for a non-conformant
 Input is the authoritative raw form (RGBA8 / f32 PCM) — the exact bytes the client also
 previewed — so there is no decode ambiguity between preview and render.
 
+**Facet source.** `facet` is either an inline module or a published registry Facet:
+
+- `{ "inline": "<base64 wasm>" }` — a self-contained module, admitted before it runs.
+- `{ "id": "<facet id>" }` — a **published** registry Facet, resolved by id. It may be a wasm
+  module or a DSL program (a program runs on the shared interpreter). Only `published` Facets
+  render by id; an unpublished or unknown id is a `404` (its existence is not revealed).
+
 **Colour.** Colour comes from the source image (a deterministic mean), not the Facet, so it
 stays `preview == render`:
 
@@ -120,19 +127,31 @@ not revealed).
 
 ### `POST /v1/facets` *(author)*
 
-Publish. Body: `{ "name": "My Facet", "wasm": "<base64 module>" }`. Certifies, then stores.
-`201 { "facet": { id, name, author, abiKind, wasmSha256, state, createdAt, certificate } }`.
-`422` non-conformant · `403` not an author · `400` empty/oversized name or bad base64.
+Publish a Facet — a wasm module **or** a DSL program (exactly one). Certifies, then stores.
+
+- wasm module: `{ "name": "My Facet", "wasm": "<base64 module>" }`.
+- DSL program: `{ "name": "My Facet", "program": "<base64 bytecode>", "engine": "ascii" }` —
+  the `engine` (`ascii`, `ascii-structural`, `spectral`) fixes the stride the program must
+  declare.
+
+`201 { "facet": { id, name, author, state, createdAt, artifact } }`, where `artifact` is
+tagged by `kind`: `{ kind: "wasm", abiKind, wasmSha256, certificate }` or
+`{ kind: "program", engine, stride, programSha256, certificate }`.
+
+`422` non-conformant (or unknown engine / stride mismatch for a program) · `403` not an
+author · `400` empty/oversized name, bad base64, or not exactly one of `wasm`/`program`.
 
 ### `GET /v1/facets`
 
 List `published` Facets, newest first: `200 { "facets": [ summary… ] }`. A moderator may pass
 `?state=certified` (or `rejected`) to review the queue (`403` for non-moderators).
 
-### `GET /v1/facets/{id}` · `GET /v1/facets/{id}/wasm`
+### `GET /v1/facets/{id}` · `GET /v1/facets/{id}/wasm` · `GET /v1/facets/{id}/program`
 
-A Facet's metadata + certificate, and its module bytes (`application/wasm`). Subject to the
-visibility rule above (`404` if not visible to the caller).
+A Facet's metadata + certificate, and its bytes. The two byte endpoints are kind-specific: a
+wasm Facet's module from `/wasm` (`application/wasm`), a program Facet's bytecode from
+`/program` (`application/octet-stream`). Asking the wrong endpoint for a Facet (e.g. `/wasm`
+on a program) is a `404`, as is a Facet not visible to the caller (per the rule above).
 
 ### `POST /v1/facets/{id}/moderate` *(moderator)*
 

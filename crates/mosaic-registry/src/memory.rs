@@ -9,7 +9,7 @@ use crate::{FacetRecord, FacetState, FacetSummary, ListFilter, NewFacet, Store, 
 
 struct Stored {
     record: FacetRecord,
-    wasm: Vec<u8>,
+    bytes: Vec<u8>,
 }
 
 /// A process-local registry store. Data does not survive a restart — use for tests and
@@ -37,18 +37,16 @@ impl Store for InMemoryStore {
             id: facet.id,
             name: facet.name,
             author: facet.author,
-            abi_kind: facet.abi_kind,
-            wasm_sha256: facet.wasm_sha256,
             state: facet.state,
             created_at: facet.created_at,
-            certificate: facet.certificate,
+            artifact: facet.artifact,
         };
         let mut map = self.lock()?;
         map.insert(
             record.id.clone(),
             Stored {
                 record: record.clone(),
-                wasm: facet.wasm,
+                bytes: facet.bytes,
             },
         );
         Ok(record)
@@ -58,8 +56,8 @@ impl Store for InMemoryStore {
         Ok(self.lock()?.get(id).map(|s| s.record.clone()))
     }
 
-    fn get_wasm(&self, id: &str) -> Result<Option<Vec<u8>>, StoreError> {
-        Ok(self.lock()?.get(id).map(|s| s.wasm.clone()))
+    fn get_bytes(&self, id: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        Ok(self.lock()?.get(id).map(|s| s.bytes.clone()))
     }
 
     fn list(&self, filter: &ListFilter) -> Result<Vec<FacetSummary>, StoreError> {
@@ -92,9 +90,10 @@ impl Store for InMemoryStore {
 
 #[cfg(test)]
 mod tests {
-    use mosaic_certify::{AbiKind, Certificate, Profile};
+    use mosaic_certify::{AbiKind, Certificate, Profile, ProgramCertificate};
 
     use super::*;
+    use crate::{ArtifactKind, FacetArtifact};
 
     fn cert() -> Certificate {
         Certificate {
@@ -106,17 +105,37 @@ mod tests {
         }
     }
 
+    fn wasm_artifact() -> FacetArtifact {
+        FacetArtifact::Wasm {
+            abi_kind: AbiKind::Gather,
+            wasm_sha256: "ab".repeat(32),
+            certificate: cert(),
+        }
+    }
+
+    fn program_artifact() -> FacetArtifact {
+        FacetArtifact::Program {
+            engine: "ascii".to_string(),
+            stride: 3,
+            program_sha256: "cd".repeat(32),
+            certificate: ProgramCertificate {
+                certify_version: 1,
+                program_sha256: "cd".repeat(32),
+                stride: 3,
+                probes: vec![],
+            },
+        }
+    }
+
     fn new_facet(id: &str, name: &str, state: FacetState, created_at: i64) -> NewFacet {
         NewFacet {
             id: id.to_string(),
             name: name.to_string(),
             author: "author-1".to_string(),
-            abi_kind: AbiKind::Gather,
-            wasm_sha256: "ab".repeat(32),
             state,
             created_at,
-            certificate: cert(),
-            wasm: vec![1, 2, 3, 4],
+            artifact: wasm_artifact(),
+            bytes: vec![1, 2, 3, 4],
         }
     }
 
@@ -129,8 +148,29 @@ mod tests {
         let got = store.get("id1").unwrap().unwrap();
         assert_eq!(got.name, "Ramp");
         assert_eq!(got.state, FacetState::Certified);
-        assert_eq!(store.get_wasm("id1").unwrap().unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(got.artifact.kind(), ArtifactKind::Wasm);
+        assert_eq!(store.get_bytes("id1").unwrap().unwrap(), vec![1, 2, 3, 4]);
         assert!(store.get("missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn stores_a_program_facet() {
+        let store = InMemoryStore::new();
+        store
+            .insert(NewFacet {
+                id: "prog".to_string(),
+                name: "DSL Ramp".to_string(),
+                author: "author-1".to_string(),
+                state: FacetState::Certified,
+                created_at: 100,
+                artifact: program_artifact(),
+                bytes: vec![7, 7, 7],
+            })
+            .unwrap();
+        let got = store.get("prog").unwrap().unwrap();
+        assert_eq!(got.artifact.kind(), ArtifactKind::Program);
+        assert_eq!(got.summary().kind, ArtifactKind::Program);
+        assert_eq!(store.get_bytes("prog").unwrap().unwrap(), vec![7, 7, 7]);
     }
 
     #[test]

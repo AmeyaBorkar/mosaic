@@ -12,7 +12,7 @@
 
 use std::fmt;
 
-use mosaic_certify::{AbiKind, Certificate};
+use mosaic_certify::{AbiKind, Certificate, ProgramCertificate};
 use serde::{Deserialize, Serialize};
 
 mod memory;
@@ -55,6 +55,58 @@ impl FacetState {
     }
 }
 
+/// What a stored Facet actually is. The registry admits two kinds, each carrying its own
+/// conformance certificate: a self-contained wasm module, or a DSL bytecode program that
+/// runs on the one shared interpreter Facet. The bytes themselves (module or bytecode) are
+/// stored alongside and fetched with [`Store::get_bytes`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum FacetArtifact {
+    /// A self-contained wasm Facet module (gather or propagation).
+    Wasm {
+        /// The module's map ABI, from its certificate.
+        abi_kind: AbiKind,
+        /// Content hash of the module bytes, from its certificate.
+        wasm_sha256: String,
+        /// The conformance certificate.
+        certificate: Certificate,
+    },
+    /// A DSL bytecode program run on the shared interpreter, targeting `engine`'s feature
+    /// vocabulary (which fixes its `stride`).
+    Program {
+        /// The feature engine the program is authored for (e.g. `ascii`, `spectral`).
+        engine: String,
+        /// The program's declared feature stride (must match `engine`'s).
+        stride: u32,
+        /// Content hash of the bytecode, from its certificate.
+        program_sha256: String,
+        /// The conformance certificate.
+        certificate: ProgramCertificate,
+    },
+}
+
+/// The bare discriminant of a [`FacetArtifact`], for listings and content-type dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactKind {
+    Wasm,
+    Program,
+}
+
+impl FacetArtifact {
+    /// This artifact's bare kind.
+    pub fn kind(&self) -> ArtifactKind {
+        match self {
+            FacetArtifact::Wasm { .. } => ArtifactKind::Wasm,
+            FacetArtifact::Program { .. } => ArtifactKind::Program,
+        }
+    }
+}
+
 /// Everything needed to persist a newly-certified Facet.
 #[derive(Debug, Clone)]
 pub struct NewFacet {
@@ -64,33 +116,27 @@ pub struct NewFacet {
     pub name: String,
     /// Principal id of the author.
     pub author: String,
-    /// The Facet's ABI kind (from its certificate).
-    pub abi_kind: AbiKind,
-    /// Content hash of the module bytes (from its certificate).
-    pub wasm_sha256: String,
     /// Initial moderation state (`Certified`).
     pub state: FacetState,
     /// Creation time, unix seconds (the server stamps it).
     pub created_at: i64,
-    /// The conformance certificate.
-    pub certificate: Certificate,
-    /// The module bytes.
-    pub wasm: Vec<u8>,
+    /// What this Facet is (wasm module or DSL program) and its certificate.
+    pub artifact: FacetArtifact,
+    /// The stored bytes — the wasm module, or the DSL bytecode.
+    pub bytes: Vec<u8>,
 }
 
-/// A stored Facet's full metadata (everything but the module bytes; fetch those with
-/// [`Store::get_wasm`]).
+/// A stored Facet's full metadata (everything but the bytes; fetch those with
+/// [`Store::get_bytes`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FacetRecord {
     pub id: String,
     pub name: String,
     pub author: String,
-    pub abi_kind: AbiKind,
-    pub wasm_sha256: String,
     pub state: FacetState,
     pub created_at: i64,
-    pub certificate: Certificate,
+    pub artifact: FacetArtifact,
 }
 
 /// A lightweight listing entry — no certificate, no bytes.
@@ -100,7 +146,7 @@ pub struct FacetSummary {
     pub id: String,
     pub name: String,
     pub author: String,
-    pub abi_kind: AbiKind,
+    pub kind: ArtifactKind,
     pub state: FacetState,
     pub created_at: i64,
 }
@@ -112,7 +158,7 @@ impl FacetRecord {
             id: self.id.clone(),
             name: self.name.clone(),
             author: self.author.clone(),
-            abi_kind: self.abi_kind,
+            kind: self.artifact.kind(),
             state: self.state,
             created_at: self.created_at,
         }
@@ -153,8 +199,9 @@ pub trait Store: Send + Sync {
     /// Fetch a Facet's metadata by id, or `None` if absent.
     fn get(&self, id: &str) -> Result<Option<FacetRecord>, StoreError>;
 
-    /// Fetch a Facet's module bytes by id, or `None` if absent.
-    fn get_wasm(&self, id: &str) -> Result<Option<Vec<u8>>, StoreError>;
+    /// Fetch a Facet's stored bytes by id (the wasm module or DSL bytecode), or `None` if
+    /// absent.
+    fn get_bytes(&self, id: &str) -> Result<Option<Vec<u8>>, StoreError>;
 
     /// List Facets matching `filter`, newest first.
     fn list(&self, filter: &ListFilter) -> Result<Vec<FacetSummary>, StoreError>;

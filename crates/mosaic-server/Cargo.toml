@@ -35,3 +35,5 @@ sha2 = "0.10"
 [dev-dependencies]
 # Drive the router in-process (ServiceExt::oneshot) — HTTP tests with no sockets.
 tower = { version = "0.5", features = ["util"] }
+# Compile a real DSL program to bytecode in the program-publish/render tests.
+mosaic-dsl = { path = "../mosaic-dsl" }

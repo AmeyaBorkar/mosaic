@@ -21,7 +21,7 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use mosaic_registry::Store;
-use mosaic_runtime::Sandbox;
+use mosaic_runtime::{Facet, Sandbox};
 
 mod auth;
 mod certify;
@@ -31,6 +31,14 @@ mod health;
 mod render;
 
 pub use auth::{AuthConfig, AuthedPrincipal, OptionalPrincipal, Principal, Role, TokenEntry};
+
+/// Compile the shipped interpreter Facet (`mosaic_certify::INTERP_WASM`) in `sandbox`, once,
+/// so DSL-program Facets can be certified and rendered without recompiling it per request.
+/// It is a trusted, first-party module (it re-validates every untrusted program it runs), so
+/// this is an ordinary [`Sandbox::compile`] — the same admission any Facet gets.
+pub fn compile_interp(sandbox: &Sandbox) -> anyhow::Result<Facet> {
+    sandbox.compile(mosaic_certify::INTERP_WASM)
+}
 
 /// Maximum length (in characters) of a Facet's display name.
 const MAX_NAME_LEN: usize = 100;
@@ -46,6 +54,9 @@ const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 pub struct AppState {
     /// The authoritative Facet host, shared across requests.
     pub sandbox: Arc<Sandbox>,
+    /// The shared DSL interpreter Facet, compiled once (see [`compile_interp`]). DSL-program
+    /// Facets certify and render on this one trusted module.
+    pub interp: Arc<Facet>,
     /// The bearer-token table (hashed) for authentication.
     pub auth: Arc<AuthConfig>,
     /// The Facet registry backend.
@@ -63,6 +74,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/facets", get(facets::list).post(facets::publish))
         .route("/v1/facets/{id}", get(facets::get_facet))
         .route("/v1/facets/{id}/wasm", get(facets::get_wasm))
+        .route("/v1/facets/{id}/program", get(facets::get_program))
         .route("/v1/facets/{id}/moderate", post(facets::moderate))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)

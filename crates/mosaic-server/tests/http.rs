@@ -11,7 +11,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use mosaic_registry::InMemoryStore;
 use mosaic_runtime::Sandbox;
-use mosaic_server::{AppState, AuthConfig, TokenEntry, app};
+use mosaic_server::{AppState, AuthConfig, TokenEntry, app, compile_interp};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -38,8 +38,11 @@ fn test_app() -> axum::Router {
         },
     ])
     .unwrap();
+    let sandbox = Sandbox::new().expect("sandbox");
+    let interp = Arc::new(compile_interp(&sandbox).expect("compile interp"));
     app(AppState {
-        sandbox: Arc::new(Sandbox::new().expect("sandbox")),
+        sandbox: Arc::new(sandbox),
+        interp,
         auth: Arc::new(auth),
         registry: Arc::new(InMemoryStore::new()),
     })
@@ -279,7 +282,8 @@ async fn publish_certifies_and_stores_certified() {
     assert_eq!(body["facet"]["name"], "Ramp Deluxe");
     assert_eq!(body["facet"]["author"], "alice");
     assert_eq!(body["facet"]["state"], "certified");
-    assert_eq!(body["facet"]["abiKind"], "gather");
+    assert_eq!(body["facet"]["artifact"]["kind"], "wasm");
+    assert_eq!(body["facet"]["artifact"]["abiKind"], "gather");
     assert!(!body["facet"]["id"].as_str().unwrap().is_empty());
 }
 
@@ -509,4 +513,202 @@ async fn render_ascii_with_color_adds_per_cell_colors() {
     assert!(out["text"].is_string());
     let n = (out["cols"].as_u64().unwrap() * out["rows"].as_u64().unwrap()) as usize;
     assert_eq!(out["colors"].as_array().unwrap().len(), n);
+}
+
+// --- DSL program Facets: publish, moderate, render by id, fetch bytecode. ---
+
+const ASCII_SCHEMA: mosaic_dsl::Schema = mosaic_dsl::Schema {
+    stride: 3,
+    features: &[("luma", 0), ("grad_mag", 1), ("grad_dir", 2)],
+    params: &[("threshold", 0.6)],
+};
+
+/// A real authored DSL program: a density ramp over the ASCII (stride-3) vocabulary.
+fn ascii_program() -> Vec<u8> {
+    mosaic_dsl::compile(r#"ramp(luma, " .:-=+*#%@")"#, &ASCII_SCHEMA).unwrap()
+}
+
+async fn publish_program(app: &axum::Router, token: &str, name: &str, engine: &str) -> Response {
+    let body = serde_json::json!({
+        "name": name,
+        "engine": engine,
+        "program": STANDARD.encode(ascii_program()),
+    });
+    app.clone()
+        .oneshot(post_json_auth("/v1/facets", body, token))
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn publish_program_certifies_and_stores() {
+    let app = test_app();
+    let resp = publish_program(&app, "author-token", "DSL Ramp", "ascii").await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = json_body(resp).await;
+    assert_eq!(body["facet"]["state"], "certified");
+    assert_eq!(body["facet"]["artifact"]["kind"], "program");
+    assert_eq!(body["facet"]["artifact"]["engine"], "ascii");
+    assert_eq!(body["facet"]["artifact"]["stride"], 3);
+    assert_eq!(body["facet"]["artifact"]["certificate"]["stride"], 3);
+    assert!(
+        body["facet"]["artifact"]["programSha256"]
+            .as_str()
+            .unwrap()
+            .len()
+            == 64
+    );
+}
+
+#[tokio::test]
+async fn publish_program_rejects_unknown_engine() {
+    let app = test_app();
+    let resp = publish_program(&app, "author-token", "Mystery", "bogus-engine").await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(json_body(resp).await["error"]["code"], "unknown_engine");
+}
+
+#[tokio::test]
+async fn publish_program_rejects_stride_mismatch() {
+    // A stride-3 (ascii) program published for the stride-1 spectral engine is refused.
+    let app = test_app();
+    let resp = publish_program(&app, "author-token", "Wrong Engine", "spectral").await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json_body(resp).await["error"]["code"],
+        "program_stride_mismatch"
+    );
+}
+
+#[tokio::test]
+async fn publish_rejects_both_wasm_and_program() {
+    let app = test_app();
+    let body = serde_json::json!({
+        "name": "Both",
+        "wasm": STANDARD.encode(FACET_RAMP),
+        "program": STANDARD.encode(ascii_program()),
+        "engine": "ascii",
+    });
+    let resp = app
+        .clone()
+        .oneshot(post_json_auth("/v1/facets", body, "author-token"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(resp).await["error"]["code"], "bad_request");
+}
+
+#[tokio::test]
+async fn render_by_id_runs_a_published_program() {
+    let app = test_app();
+    // Publish a DSL program, then a moderator approves it so it is renderable by id.
+    let created = json_body(publish_program(&app, "author-token", "DSL Ramp", "ascii").await).await;
+    let id = created["facet"]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        moderate(&app, &id, "publish", "mod-token").await.status(),
+        StatusCode::OK
+    );
+
+    let (w, h) = (8u32, 8u32);
+    let rgba = vec![200u8; (w * h * 4) as usize];
+    let body = serde_json::json!({
+        "engine": "ascii",
+        "facet": { "id": id },
+        "input": { "rgba": STANDARD.encode(&rgba), "width": w, "height": h },
+        "params": { "cols": 8, "cellAspect": 1.0 }
+    });
+    let resp = app
+        .clone()
+        .oneshot(post_json("/v1/render", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let out = json_body(resp).await;
+    assert_eq!(out["cols"], 8);
+    assert!(!out["text"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn render_by_id_refuses_unpublished_program() {
+    let app = test_app();
+    // Certified but not yet published: not renderable by id (a 404, not revealing it exists).
+    let created = json_body(publish_program(&app, "author-token", "Draft", "ascii").await).await;
+    let id = created["facet"]["id"].as_str().unwrap().to_string();
+
+    let body = serde_json::json!({
+        "engine": "ascii",
+        "facet": { "id": id },
+        "input": { "rgba": STANDARD.encode(vec![200u8; 8 * 8 * 4]), "width": 8, "height": 8 },
+        "params": { "cols": 8 }
+    });
+    let resp = app
+        .clone()
+        .oneshot(post_json("/v1/render", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_program_returns_bytecode_and_wasm_endpoint_404s() {
+    let app = test_app();
+    let created = json_body(publish_program(&app, "author-token", "Bytes", "ascii").await).await;
+    let id = created["facet"]["id"].as_str().unwrap().to_string();
+
+    // The bytecode is served from /program (author sees their own certified facet).
+    let resp = app
+        .clone()
+        .oneshot(get_with_token(
+            &format!("/v1/facets/{id}/program"),
+            "author-token",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "application/octet-stream"
+    );
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(bytes.as_ref(), ascii_program().as_slice());
+
+    // A program has no wasm module: /wasm is a 404 for it.
+    let resp = app
+        .clone()
+        .oneshot(get_with_token(
+            &format!("/v1/facets/{id}/wasm"),
+            "author-token",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn render_by_id_runs_a_published_wasm_facet() {
+    let app = test_app();
+    let created = json_body(publish_ramp(&app, "author-token", "Ramp").await).await;
+    let id = created["facet"]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        moderate(&app, &id, "publish", "mod-token").await.status(),
+        StatusCode::OK
+    );
+
+    let body = serde_json::json!({
+        "engine": "ascii",
+        "facet": { "id": id },
+        "input": { "rgba": STANDARD.encode(vec![200u8; 8 * 8 * 4]), "width": 8, "height": 8 },
+        "params": { "cols": 8, "cellAspect": 1.0 }
+    });
+    let resp = app
+        .clone()
+        .oneshot(post_json("/v1/render", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(!json_body(resp).await["text"].as_str().unwrap().is_empty());
 }
