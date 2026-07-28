@@ -25,7 +25,7 @@ jobs:
     name: Rust — fmt, clippy, test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust (stable + wasm32)
         run: |
@@ -77,7 +77,7 @@ jobs:
     name: Web — facet-abi + mosaic-wasm (Node)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust (stable + wasm32)
         run: |
@@ -127,7 +127,7 @@ jobs:
     name: Security — cargo audit (RUSTSEC advisories)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Installs the pinned toolchain from rust-toolchain.toml.
       - name: Install Rust
