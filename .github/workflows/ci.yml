@@ -116,6 +116,7 @@ jobs:
           packages/facet-abi/test/dsl.test.ts
           packages/facet-abi/test/cert.test.ts
           packages/facet-abi/test/program.test.ts
+          packages/facet-abi/test/program_cert.test.ts
           crates/mosaic-wasm/test/pipeline.test.ts
           crates/mosaic-wasm/test/spectral.test.ts
           crates/mosaic-wasm/test/composite.test.ts

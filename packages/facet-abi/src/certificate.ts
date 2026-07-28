@@ -9,7 +9,7 @@
 // hash the certificate attests, binding the golden to the exact bytes.
 
 import { FacetAbiError } from "./abi.ts";
-import { compileFacet, runFacetMap, runFacetMap2d } from "./host.ts";
+import { compileFacet, runFacetMap, runFacetMap2d, runFacetProgram } from "./host.ts";
 
 /** Which map entry point a certified Facet exports. */
 export type AbiKind = "gather" | "propagation";
@@ -104,33 +104,95 @@ export async function verifyCertificate(
         throw e;
       }
     }
+    assertProbeMatches(probe, tokens, trapped);
+  }
+}
 
-    if (probe.outcome.result === "trapped") {
-      if (!trapped) {
-        throw new FacetAbiError(
-          `probe '${probe.name}': certificate records a trap, but the browser produced tokens`,
-        );
-      }
-      continue;
-    }
-
-    if (trapped || tokens === undefined) {
+/** Assert the browser's `(tokens | trapped)` outcome for `probe` matches what the certificate
+ *  records — identical tokens, or *also* a trap. Throws a {@link FacetAbiError} on the first
+ *  divergence. Shared by the wasm and DSL-program verifiers, so the checked property is
+ *  single-sourced. */
+function assertProbeMatches(
+  probe: Probe,
+  tokens: Uint32Array | undefined,
+  trapped: boolean,
+): void {
+  if (probe.outcome.result === "trapped") {
+    if (!trapped) {
       throw new FacetAbiError(
-        `probe '${probe.name}': certificate records tokens, but the browser trapped`,
+        `probe '${probe.name}': certificate records a trap, but the browser produced tokens`,
       );
     }
-    const expected = probe.outcome.tokens;
-    if (tokens.length !== expected.length) {
+    return;
+  }
+  if (trapped || tokens === undefined) {
+    throw new FacetAbiError(
+      `probe '${probe.name}': certificate records tokens, but the browser trapped`,
+    );
+  }
+  const expected = probe.outcome.tokens;
+  if (tokens.length !== expected.length) {
+    throw new FacetAbiError(
+      `probe '${probe.name}': produced ${tokens.length} tokens, certificate has ${expected.length}`,
+    );
+  }
+  for (let i = 0; i < expected.length; i++) {
+    if (tokens[i] !== expected[i]) {
       throw new FacetAbiError(
-        `probe '${probe.name}': produced ${tokens.length} tokens, certificate has ${expected.length}`,
+        `probe '${probe.name}': token[${i}] is ${tokens[i]}, certificate has ${expected[i]}`,
       );
     }
-    for (let i = 0; i < expected.length; i++) {
-      if (tokens[i] !== expected[i]) {
-        throw new FacetAbiError(
-          `probe '${probe.name}': token[${i}] is ${tokens[i]}, certificate has ${expected[i]}`,
-        );
+  }
+}
+
+/** A DSL program's conformance certificate — the browser view of
+ *  `mosaic_certify::ProgramCertificate`. Bound to the exact bytecode by `programSha256`; there
+ *  is no `abiKind` (a program is always gather) and no wasm `profile`. */
+export interface ProgramCertificate {
+  certifyVersion: number;
+  programSha256: string;
+  stride: number;
+  probes: Probe[];
+}
+
+/**
+ * Verify a DSL `programBytes` against `certificate`, running it on the shared `interp` module.
+ *
+ * The bytes must hash to the attested `programSha256`, and replaying every probe through the
+ * interpreter ({@link runFacetProgram}) must reproduce the recorded outcome — identical
+ * tokens, or *also* a trap. `interp` is the shared interpreter Facet, compiled once
+ * ({@link compileFacet}) and reused across program verifications. This is what makes
+ * "preview == render" a checked property for an authored DSL Facet, not only for the shipped
+ * goldens. Resolves on success; rejects with a {@link FacetAbiError} naming the first
+ * divergence.
+ */
+export async function verifyProgramCertificate(
+  interp: WebAssembly.Module,
+  programBytes: Uint8Array,
+  certificate: ProgramCertificate,
+): Promise<void> {
+  const actualHash = await sha256Hex(programBytes);
+  if (actualHash !== certificate.programSha256) {
+    throw new FacetAbiError(
+      `program certificate hash mismatch: it attests ${certificate.programSha256}, but the bytes hash to ${actualHash}`,
+    );
+  }
+
+  for (const probe of certificate.probes) {
+    const features = Float32Array.from(probe.features);
+    const ncells = probe.cols * probe.rows;
+
+    let tokens: Uint32Array | undefined;
+    let trapped = false;
+    try {
+      tokens = runFacetProgram(interp, programBytes, features, ncells, probe.stride);
+    } catch (e) {
+      if (e instanceof FacetAbiError) {
+        trapped = true;
+      } else {
+        throw e;
       }
     }
+    assertProbeMatches(probe, tokens, trapped);
   }
 }

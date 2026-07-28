@@ -8,6 +8,6 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "node --test test/conformance.test.ts test/adversarial.test.ts test/timeout.test.ts"
+    "test": "node --test test/conformance.test.ts test/adversarial.test.ts test/conformance-gate.test.ts test/timeout.test.ts test/dsl.test.ts test/cert.test.ts test/program.test.ts test/program_cert.test.ts"
   }
 }
