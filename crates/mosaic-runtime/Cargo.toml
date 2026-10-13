@@ -7,7 +7,7 @@ description = "Mosaic's safe WASM host: executes pure, metered, sandboxed Facets
 publish = false
 
 [dependencies]
-wasmtime = "47"
+wasmtime = "49"
 anyhow = "1"
 # A cheap structural pre-pass over untrusted module bytes (function count + per-body
 # size) to bound Cranelift compilation cost before Module::new. Pinned to the version
